@@ -54,8 +54,12 @@ function tokenize(text) {
 }
 
 export class Monologue {
-  constructor({ onInterim, onFinal, wordDelayMs = 300, minBurstWords = 4, maxBurstWords = 12 }) {
-    this.onInterim = onInterim;
+  constructor({ onWord, onFinal, wordDelayMs = 300, minBurstWords = 4, maxBurstWords = 12 }) {
+    // Fires once per word, immediately — this module never hands out more
+    // than one word at a time; callers that want a growing phrase (rather
+    // than each word replacing the last) build that up themselves.
+    this.onWord = onWord;
+    // Fires once an utterance's random word-burst completes.
     this.onFinal = onFinal;
     this.wordDelayMs = wordDelayMs;
     this.minBurstWords = minBurstWords;
@@ -71,7 +75,7 @@ export class Monologue {
   }
 
   _resetChunk() {
-    this.chunkWords = [];
+    this.chunkWordCount = 0;
     const span = this.maxBurstWords - this.minBurstWords + 1;
     this.chunkTarget = this.minBurstWords + Math.floor(Math.random() * span);
   }
@@ -103,6 +107,17 @@ export class Monologue {
     this.timeoutId = null;
   }
 
+  // Reschedules the pending word immediately at the new pace, rather than
+  // waiting for the current (possibly much longer) wait to finish first —
+  // so a live speed slider feels responsive right away.
+  setWordDelayMs(ms) {
+    this.wordDelayMs = ms;
+    if (this.running && !this.paused) {
+      clearTimeout(this.timeoutId);
+      this._scheduleNext();
+    }
+  }
+
   resume() {
     if (!this.running || !this.paused) return;
     this.paused = false;
@@ -119,12 +134,14 @@ export class Monologue {
   _tick() {
     if (!this.running || this.paused) return;
 
-    this.chunkWords.push(this._nextWord());
-    const text = this.chunkWords.join(' ');
-    this.onInterim(text);
+    const firstOfUtterance = this.chunkWordCount === 0;
+    const word = this._nextWord();
+    this.chunkWordCount++;
 
-    if (this.chunkWords.length >= this.chunkTarget) {
-      this.onFinal(text);
+    this.onWord(word, { firstOfUtterance });
+
+    if (this.chunkWordCount >= this.chunkTarget) {
+      this.onFinal();
       this._resetChunk();
     }
 

@@ -18,12 +18,16 @@ const styleWeightEl = document.getElementById('styleWeight');
 const styleWeightVal = document.getElementById('styleWeightVal');
 const styleSizeEl = document.getElementById('styleSize');
 const styleSizeVal = document.getElementById('styleSizeVal');
+const styleUserSizeEl = document.getElementById('styleUserSize');
+const styleUserSizeVal = document.getElementById('styleUserSizeVal');
 const styleSpacingEl = document.getElementById('styleSpacing');
 const styleSpacingVal = document.getElementById('styleSpacingVal');
 const styleTransitionEl = document.getElementById('styleTransition');
 const styleTransitionVal = document.getElementById('styleTransitionVal');
 const styleHoldEl = document.getElementById('styleHold');
 const styleHoldVal = document.getElementById('styleHoldVal');
+const styleCorpusPaceEl = document.getElementById('styleCorpusPace');
+const styleCorpusPaceVal = document.getElementById('styleCorpusPaceVal');
 
 function showError(msg) {
   errorEl.hidden = false;
@@ -37,7 +41,7 @@ function setLive(isLive) {
 
 // ---- Text style (persisted rehearsal tuning) -----------------------------
 const STYLE_STORAGE_KEY = 'illuminate:textStyle';
-const DEFAULT_STYLE = { fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, letterSpacing: 0, transitionMs: 300, holdMs: 1200 };
+const DEFAULT_STYLE = { fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, userSizeScale: 1, letterSpacing: 0, transitionMs: 300, holdMs: 1200, corpusPaceMs: 300 };
 
 function loadStyle() {
   try {
@@ -53,7 +57,8 @@ function saveStyle(style) {
 }
 
 // ---- Render state ---------------------------------------------------------
-const textLayer = new TextLayer(loadStyle());
+const initialStyle = loadStyle();
+const textLayer = new TextLayer(initialStyle);
 const historyLayer = new HistoryLayer({ fontFamily: textLayer.fontFamily });
 
 let renderer;
@@ -70,36 +75,46 @@ function applyStyleToPanel(style) {
   styleWeightVal.textContent = style.fontWeight;
   styleSizeEl.value = Math.round(style.sizeScale * 100);
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
+  styleUserSizeEl.value = Math.round(style.userSizeScale * 100);
+  styleUserSizeVal.textContent = `${Math.round(style.userSizeScale * 100)}%`;
   styleSpacingEl.value = style.letterSpacing;
   styleSpacingVal.textContent = `${style.letterSpacing}px`;
   styleTransitionEl.value = style.transitionMs;
   styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
   styleHoldEl.value = style.holdMs;
   styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
+  styleCorpusPaceEl.value = style.corpusPaceMs;
+  styleCorpusPaceVal.textContent = `${style.corpusPaceMs}ms/word`;
 }
-applyStyleToPanel(textLayer);
+applyStyleToPanel(initialStyle);
 
 function onStyleInput() {
   const style = {
     fontFamily: styleFontEl.value,
     fontWeight: Number(styleWeightEl.value),
     sizeScale: Number(styleSizeEl.value) / 100,
+    userSizeScale: Number(styleUserSizeEl.value) / 100,
     letterSpacing: Number(styleSpacingEl.value),
     transitionMs: Number(styleTransitionEl.value),
     holdMs: Number(styleHoldEl.value),
+    corpusPaceMs: Number(styleCorpusPaceEl.value),
   };
   styleWeightVal.textContent = style.fontWeight;
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
+  styleUserSizeVal.textContent = `${Math.round(style.userSizeScale * 100)}%`;
   styleSpacingVal.textContent = `${style.letterSpacing}px`;
   styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
   styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
+  styleCorpusPaceVal.textContent = `${style.corpusPaceMs}ms/word`;
   textLayer.setStyle(style);
+  textLayer.setUserSizeScale(style.userSizeScale);
   textLayer.setTransitionMs(style.transitionMs);
   textLayer.setHoldMs(style.holdMs);
   historyLayer.setFontFamily(style.fontFamily);
+  monologue.setWordDelayMs(style.corpusPaceMs);
   saveStyle(style);
 }
-[styleFontEl, styleWeightEl, styleSizeEl, styleSpacingEl, styleTransitionEl, styleHoldEl].forEach((el) => {
+[styleFontEl, styleWeightEl, styleSizeEl, styleUserSizeEl, styleSpacingEl, styleTransitionEl, styleHoldEl, styleCorpusPaceEl].forEach((el) => {
   el.addEventListener('input', onStyleInput);
 });
 
@@ -126,7 +141,7 @@ function frame(t) {
   lastT = t;
 
   textLayer.update(dtMs);
-  historyLayer.update();
+  historyLayer.update(dtMs);
   if (renderer) {
     try {
       renderer.render();
@@ -165,36 +180,64 @@ glCanvas.addEventListener('webglcontextlost', (e) => {
 // of the utterance being spoken — never the finalized wording. Once an
 // utterance finalizes, it goes to the history log and the big phrase
 // dismisses instead of displaying (or holding on) the completed text.
+// History is streamed in per word too, as the transcript grows, rather
+// than waiting for the whole utterance to finish: only the words newly
+// added since the last call are pushed. (Real speech can occasionally
+// revise earlier interim words — a revision after a word has already
+// landed in the append-only history log isn't reflected there.)
+let spokenWordCount = 0;
+
 function onPhrase(text, isFinal) {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  words.slice(spokenWordCount).forEach((word, i) => {
+    historyLayer.addWord(word, { firstOfUtterance: spokenWordCount === 0 && i === 0 });
+  });
+  spokenWordCount = words.length;
+
   if (isFinal) {
-    historyLayer.addPhrase(text);
+    historyLayer.endUtterance();
     textLayer.finishUtterance();
+    spokenWordCount = 0;
   } else {
-    textLayer.setPhrase(text);
+    textLayer.setPhrase(text, { dim: false });
   }
 }
 
 // ---- Ongoing monologue (fills silence when no one is speaking) ----------
-// Feeds stored placeholder text into the exact same onPhrase() pipeline as
-// real speech, word by word. Real speech always wins: any recognizer
-// result pauses the monologue immediately, and it only resumes after a
-// short grace period of continued silence.
+// Feeds stored placeholder text word by word, live: each word both streams
+// into the history log (historyLayer.addWord) and, for now, replaces the
+// big front phrase outright (textLayer.setPhrase(word) — just that one
+// word, not the growing utterance) rather than building up a sentence
+// there. Real speech always wins: any recognizer result pauses the
+// monologue immediately, and it only resumes after a short grace period
+// of continued silence.
 const RESUME_GRACE_MS = 2500;
 let userSpeaking = false;
 let resumeTimer = null;
 
 const monologue = new Monologue({
-  onInterim: (text) => onPhrase(text, false),
-  onFinal: (text) => onPhrase(text, true),
+  wordDelayMs: initialStyle.corpusPaceMs,
+  onWord: (word, meta) => {
+    historyLayer.addWord(word, { ...meta, source: 'corpus' });
+    textLayer.setPhrase(word, { dim: true });
+  },
+  onFinal: () => {
+    historyLayer.endUtterance();
+    textLayer.finishUtterance();
+  },
 });
 
 function onSpeechResult(text, isFinal) {
   if (!userSpeaking) {
     userSpeaking = true;
     monologue.pause();
-    // Close out whatever the monologue had on screen as an aborted
-    // utterance (not sent to history) so the real transcript gets its
-    // own fresh entrance instead of silently overwriting it in place.
+    // The monologue's words already streamed into history as they were
+    // generated, so just punctuate the now-abandoned partial sentence
+    // rather than leaving it trailing with no closing mark. The big
+    // phrase, though, gets dismissed rather than shown as "finished" —
+    // it was cut off, and the real transcript gets its own fresh
+    // entrance instead of silently overwriting it in place.
+    historyLayer.endUtterance();
     textLayer.finishUtterance();
   }
   clearTimeout(resumeTimer);

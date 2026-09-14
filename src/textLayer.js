@@ -42,7 +42,7 @@ function computeLayout(ctx, text, canvasW, canvasH, fontFamily, fontWeight, size
 }
 
 export class TextLayer {
-  constructor({ fontFamily = 'system-ui, sans-serif', fontWeight = 700, sizeScale = 1, letterSpacing = 0, holdMs = 1200, transitionMs = 300 } = {}) {
+  constructor({ fontFamily = 'system-ui, sans-serif', fontWeight = 700, sizeScale = 1, letterSpacing = 0, holdMs = 1200, transitionMs = 300, userSizeScale = 1 } = {}) {
     this.fontFamily = fontFamily;
     this.fontWeight = fontWeight;
     this.sizeScale = sizeScale;
@@ -76,6 +76,16 @@ export class TextLayer {
     // setPhrase() call for that same utterance updates in place instead
     // of re-triggering the crossfade.
     this.utteranceActive = false;
+    // Whether the utterance currently on screen came from the corpus
+    // monologue rather than real speech — rendered dimmer and smaller
+    // either way, so real speech reads as the more dramatic arrival.
+    this.dim = false;
+    this.dimAlphaScale = 0.45;
+    this.dimSizeScale = 0.8;
+    // Extra multiplier on top of sizeScale, applied to real speech only
+    // (corpus size is governed by dimSizeScale instead) — lets the user
+    // text's peak size be tuned independently of the shared base size.
+    this.userSizeScale = userSizeScale;
   }
 
   resize(w, h) {
@@ -100,10 +110,16 @@ export class TextLayer {
     this.transitionMs = ms;
   }
 
+  setUserSizeScale(scale) {
+    this.userSizeScale = scale;
+  }
+
   // Live/interim transcript for the utterance currently being spoken.
   // The finalized wording is never shown here — call finishUtterance()
-  // when the utterance completes instead of another setPhrase().
-  setPhrase(text) {
+  // when the utterance completes instead of another setPhrase(). Pass
+  // dim: true for corpus/monologue text — ignored on continuation calls
+  // for the same utterance, since that's decided when the utterance starts.
+  setPhrase(text, { dim = false } = {}) {
     text = text.trim();
     if (!text) return;
 
@@ -128,6 +144,7 @@ export class TextLayer {
       this.pendingText = text;
       this._applyPending();
       this.utteranceActive = true;
+      this.dim = dim;
     }
   }
 
@@ -210,9 +227,12 @@ export class TextLayer {
     if (!this.currentText || this.alpha <= 0) return;
 
     if (!this.layout) {
+      const effectiveSizeScale = this.dim
+        ? this.sizeScale * this.dimSizeScale
+        : this.sizeScale * this.userSizeScale;
       this.layout = computeLayout(
         ctx, this.currentText, canvas.width, canvas.height,
-        this.fontFamily, this.fontWeight, this.sizeScale
+        this.fontFamily, this.fontWeight, effectiveSizeScale
       );
     }
     const { fontSize, lines, lineHeight } = this.layout;
@@ -230,7 +250,8 @@ export class TextLayer {
     ctx.font = `${this.fontWeight} ${fontSize}px ${this.fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha})`;
+    const renderAlpha = this.dim ? this.alpha * this.dimAlphaScale : this.alpha;
+    ctx.fillStyle = `rgba(255, 255, 255, ${renderAlpha})`;
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${this.letterSpacing}px`;
 
     const totalHeight = lines.length * lineHeight;
