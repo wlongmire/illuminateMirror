@@ -56,15 +56,11 @@ export class TextLayer {
     this.alpha = 0;
     this.scale = 1;
     this.blur = 0;
-    this.phase = 'empty'; // empty | out | interrupt | in | hold
+    this.phase = 'empty'; // empty | out | in | hold
     this.timer = 0;
     // Entrance and exit share one duration so the phrase takes as long to
     // leave as it took to arrive.
     this.transitionMs = transitionMs;
-    // A new utterance interrupting a still-visible one gets a quick plain
-    // opacity fade instead of the full exit animation — just enough to
-    // soften the cut, not a second full transition.
-    this.interruptFadeMs = 180;
     // Exit is the entrance played in reverse: grows in from enterScale to
     // 1.0 while sharpening, then shrinks back down to enterScale while
     // reblurring on the way out.
@@ -104,7 +100,10 @@ export class TextLayer {
     this.transitionMs = ms;
   }
 
-  setPhrase(text, isFinal = true) {
+  // Live/interim transcript for the utterance currently being spoken.
+  // The finalized wording is never shown here — call finishUtterance()
+  // when the utterance completes instead of another setPhrase().
+  setPhrase(text) {
     text = text.trim();
     if (!text) return;
 
@@ -123,18 +122,26 @@ export class TextLayer {
         this.layout = null;
       }
     } else {
-      // A new utterance starting — briefly fade whatever's on screen
-      // rather than a hard cut, then jump into this phrase's own entrance.
+      // A new utterance starting — clear whatever's on screen immediately
+      // (skip any exit animation in progress) and jump straight into this
+      // phrase's own entrance, rather than waiting out a fade first.
       this.pendingText = text;
-      if (this.phase === 'empty') {
-        this._applyPending();
-      } else {
-        this.phase = 'interrupt';
-        this.timer = 0;
-      }
+      this._applyPending();
+      this.utteranceActive = true;
     }
+  }
 
-    this.utteranceActive = !isFinal;
+  // The utterance being live-updated just finalized — dismiss whatever's
+  // on screen (it was only ever an interim transcript) rather than
+  // holding or displaying the completed wording. The finalized text
+  // belongs in the history log, not here.
+  finishUtterance() {
+    this.utteranceActive = false;
+    this.pendingText = null;
+    if (this.phase === 'in' || this.phase === 'hold') {
+      this.phase = 'out';
+      this.timer = 0;
+    }
   }
 
   _applyPending() {
@@ -170,13 +177,6 @@ export class TextLayer {
       const t = Math.min(1, this.timer / this.transitionMs);
       this._applyEasedPose(easeOutCubic(1 - t));
       if (this.timer >= this.transitionMs) this._applyPending();
-    } else if (this.phase === 'interrupt') {
-      // Quick eased fade-out (size/blur held at whatever they were) —
-      // softens the cut without waiting out a full exit animation.
-      this.timer += dtMs;
-      const t = Math.min(1, this.timer / this.interruptFadeMs);
-      this.alpha = easeOutCubic(1 - t);
-      if (this.timer >= this.interruptFadeMs) this._applyPending();
     } else if (this.phase === 'in') {
       this.timer += dtMs;
       const t = Math.min(1, this.timer / this.transitionMs);

@@ -2,6 +2,7 @@ import { createSpeechRecognizer } from './speech.js';
 import { TextLayer } from './textLayer.js';
 import { HistoryLayer } from './historyLayer.js';
 import { Renderer } from './renderer.js';
+import { Monologue } from './monologue.js';
 
 // ---- DOM --------------------------------------------------------------
 const glCanvas = document.getElementById('gl');
@@ -135,7 +136,8 @@ function frame(t) {
   }
 
   if (debugOn) {
-    debugEl.textContent = `phase ${textLayer.phase}  alpha ${textLayer.alpha.toFixed(2)}`;
+    const mode = userSpeaking ? 'speech' : 'monologue';
+    debugEl.textContent = `mode ${mode}  phase ${textLayer.phase}  alpha ${textLayer.alpha.toFixed(2)}`;
   }
 
   requestAnimationFrame(frame);
@@ -159,13 +161,53 @@ glCanvas.addEventListener('webglcontextlost', (e) => {
 });
 
 // ---- Speech input -----------------------------------------------------
-function onPhrase(text, isFinal = true) {
-  textLayer.setPhrase(text, isFinal);
-  if (isFinal) historyLayer.addPhrase(text);
+// The big center phrase only ever shows the live, in-progress transcript
+// of the utterance being spoken — never the finalized wording. Once an
+// utterance finalizes, it goes to the history log and the big phrase
+// dismisses instead of displaying (or holding on) the completed text.
+function onPhrase(text, isFinal) {
+  if (isFinal) {
+    historyLayer.addPhrase(text);
+    textLayer.finishUtterance();
+  } else {
+    textLayer.setPhrase(text);
+  }
+}
+
+// ---- Ongoing monologue (fills silence when no one is speaking) ----------
+// Feeds stored placeholder text into the exact same onPhrase() pipeline as
+// real speech, word by word. Real speech always wins: any recognizer
+// result pauses the monologue immediately, and it only resumes after a
+// short grace period of continued silence.
+const RESUME_GRACE_MS = 2500;
+let userSpeaking = false;
+let resumeTimer = null;
+
+const monologue = new Monologue({
+  onInterim: (text) => onPhrase(text, false),
+  onFinal: (text) => onPhrase(text, true),
+});
+
+function onSpeechResult(text, isFinal) {
+  if (!userSpeaking) {
+    userSpeaking = true;
+    monologue.pause();
+    // Close out whatever the monologue had on screen as an aborted
+    // utterance (not sent to history) so the real transcript gets its
+    // own fresh entrance instead of silently overwriting it in place.
+    textLayer.finishUtterance();
+  }
+  clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => {
+    userSpeaking = false;
+    monologue.resume();
+  }, RESUME_GRACE_MS);
+
+  onPhrase(text, isFinal);
 }
 
 const recognizer = createSpeechRecognizer({
-  onResult: onPhrase,
+  onResult: onSpeechResult,
   onStateChange: setLive,
   onError: showError,
 });
@@ -177,8 +219,16 @@ if (!recognizer.supported) {
 startBtn.addEventListener('click', () => {
   startOverlay.hidden = true;
   recognizer.start();
+  monologue.start();
 });
 
 // Manual text injection for tech rehearsal / tuning without a live mic:
-// open the console and call __illuminate.setPhrase("some words").
-window.__illuminate = { setPhrase: onPhrase };
+// open the console and call __illuminate.setPhrase("some words") to show
+// it as a live/in-progress transcript, then __illuminate.finish("some words")
+// to finalize it (sends it to the history log, dismisses the big phrase).
+// __illuminate.monologue is the running Monologue instance (.pause()/.resume()).
+window.__illuminate = {
+  setPhrase: (text) => onPhrase(text, false),
+  finish: (text) => onPhrase(text, true),
+  monologue,
+};
