@@ -44,7 +44,7 @@
     position: fixed; bottom: 8px; left: 8px;
     font-family: ui-monospace, monospace; font-size: 11px; color: #6f6;
     background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 3px;
-    z-index: 5;
+    z-index: 5; white-space: pre; line-height: 1.5;
   }
 
   #stylePanel {
@@ -153,6 +153,24 @@
         <input type="range" id="styleCorpusFrequency" min="0.02" max="1" step="0.02" value="0.2">
       </label>
     </div>
+
+    <hr>
+
+    <h3>Video fill (corpus text)</h3>
+    <label>Source
+      <select id="styleVideoSource">
+        <option value="camera">Camera</option>
+        <option value="test">Test pattern</option>
+      </select>
+    </label>
+    <label>
+      <span class="row"><span>Influence</span><span id="styleVideoInfluenceVal">0%</span></span>
+      <input type="range" id="styleVideoInfluence" min="0" max="100" step="5" value="0">
+    </label>
+    <label>
+      <span class="row"><span>Gain</span><span id="styleVideoGainVal">1.0x</span></span>
+      <input type="range" id="styleVideoGain" min="1" max="4" step="0.1" value="1">
+    </label>
   </div>
 
   <script type="module" src="/src/main.js"></script>

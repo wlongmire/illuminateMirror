@@ -42,15 +42,27 @@ function wrapWords(ctx, words, maxWidth, spaceWidth) {
 export class HistoryLayer {
   constructor({ fontFamily = 'system-ui, sans-serif' } = {}) {
     this.fontFamily = fontFamily;
-    this.canvas = document.createElement('canvas');
-    this.ctx = this.canvas.getContext('2d');
+    // Two canvases so the renderer can shade corpus text (with video)
+    // without touching real speech. Layout is computed once and shared,
+    // so the two layers stay in exact register — each word is simply
+    // painted onto whichever layer matches its source.
+    this.userCanvas = document.createElement('canvas');
+    this.userCtx = this.userCanvas.getContext('2d');
+    this.corpusCanvas = document.createElement('canvas');
+    this.corpusCtx = this.corpusCanvas.getContext('2d');
     this.words = []; // { text, t, source: 'user' | 'corpus' }, oldest first, never trimmed
     this.scrollY = 0; // current scroll offset in px, eased toward the target each frame
   }
 
+  get layerCtxs() {
+    return [this.userCtx, this.corpusCtx];
+  }
+
   resize(w, h) {
-    this.canvas.width = Math.max(1, w);
-    this.canvas.height = Math.max(1, h);
+    for (const canvas of [this.userCanvas, this.corpusCanvas]) {
+      canvas.width = Math.max(1, w);
+      canvas.height = Math.max(1, h);
+    }
   }
 
   setFontFamily(fontFamily) {
@@ -86,25 +98,29 @@ export class HistoryLayer {
   }
 
   _drawLine(lineWords, x, y, maxWidth, justify, now) {
-    const ctx = this.ctx;
     const widths = lineWords.map((w) => w.width);
     const wordsWidth = widths.reduce((a, b) => a + b, 0);
     const gap = justify && lineWords.length > 1
       ? (maxWidth - wordsWidth) / (lineWords.length - 1)
-      : ctx.measureText(' ').width;
+      : this.userCtx.measureText(' ').width;
 
     let cx = x;
     for (let i = 0; i < lineWords.length; i++) {
-      const { alpha, riseY } = this._wordStyle(lineWords[i].t, now, lineWords[i].source);
+      const word = lineWords[i];
+      // Position is identical either way — only the target layer differs.
+      const ctx = word.source === 'corpus' ? this.corpusCtx : this.userCtx;
+      const { alpha, riseY } = this._wordStyle(word.t, now, word.source);
       ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-      ctx.fillText(lineWords[i].text, cx, y + riseY);
+      ctx.fillText(word.text, cx, y + riseY);
       cx += widths[i] + gap;
     }
   }
 
   _draw(dtMs) {
-    const { canvas, ctx } = this;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const canvas = this.userCanvas; // both layers share these dimensions
+    for (const layerCtx of this.layerCtxs) {
+      layerCtx.clearRect(0, 0, canvas.width, canvas.height);
+    }
     if (!this.words.length) return;
 
     const fontSize = Math.max(14, Math.min(canvas.width, canvas.height) * 0.022);
@@ -115,10 +131,15 @@ export class HistoryLayer {
     const maxY = canvas.height - marginTop;
     const viewportHeight = maxY - marginTop;
 
-    ctx.font = `400 ${fontSize}px ${this.fontFamily}`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
+    for (const layerCtx of this.layerCtxs) {
+      layerCtx.font = `400 ${fontSize}px ${this.fontFamily}`;
+      layerCtx.textAlign = 'left';
+      layerCtx.textBaseline = 'top';
+    }
 
+    // Measured once on one layer — the font is identical on both, so the
+    // layout below applies to each without drifting out of register.
+    const ctx = this.userCtx;
     const words = this.words.map((w) => ({ ...w, width: ctx.measureText(w.text).width }));
     const spaceWidth = ctx.measureText(' ').width;
     const lines = wrapWords(ctx, words, maxWidth, spaceWidth);
@@ -133,10 +154,12 @@ export class HistoryLayer {
 
     const now = performance.now();
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, marginTop, canvas.width, viewportHeight);
-    ctx.clip();
+    for (const layerCtx of this.layerCtxs) {
+      layerCtx.save();
+      layerCtx.beginPath();
+      layerCtx.rect(0, marginTop, canvas.width, viewportHeight);
+      layerCtx.clip();
+    }
 
     let y = marginTop - this.scrollY;
     for (let i = 0; i < lines.length; i++) {
@@ -147,6 +170,6 @@ export class HistoryLayer {
       y += lineHeight;
     }
 
-    ctx.restore();
+    for (const layerCtx of this.layerCtxs) layerCtx.restore();
   }
 }

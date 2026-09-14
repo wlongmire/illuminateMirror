@@ -3,6 +3,7 @@ import { TextLayer } from './textLayer.js';
 import { HistoryLayer } from './historyLayer.js';
 import { Renderer } from './renderer.js';
 import { Monologue } from './monologue.js';
+import { VideoInput } from './videoInput.js';
 
 // ---- DOM --------------------------------------------------------------
 const glCanvas = document.getElementById('gl');
@@ -32,6 +33,11 @@ const styleCorpusAmplitudeVal = document.getElementById('styleCorpusAmplitudeVal
 const styleCorpusFrequencyEl = document.getElementById('styleCorpusFrequency');
 const styleCorpusFrequencyVal = document.getElementById('styleCorpusFrequencyVal');
 const corpusSineControlsEl = document.getElementById('corpusSineControls');
+const styleVideoSourceEl = document.getElementById('styleVideoSource');
+const styleVideoInfluenceEl = document.getElementById('styleVideoInfluence');
+const styleVideoInfluenceVal = document.getElementById('styleVideoInfluenceVal');
+const styleVideoGainEl = document.getElementById('styleVideoGain');
+const styleVideoGainVal = document.getElementById('styleVideoGainVal');
 
 // Errors don't render on screen (this runs unattended, projected) — just
 // logged for whoever's at a laptop during tech rehearsal.
@@ -49,6 +55,7 @@ const DEFAULT_STYLE = {
   fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, userSizeScale: 1, letterSpacing: 0,
   transitionMs: 300, holdMs: 1200,
   corpusMode: 'sine', corpusBaseMs: 300, corpusAmplitudeMs: 150, corpusFrequencyHz: 0.2,
+  videoSource: 'camera', videoInfluence: 0, videoGain: 1,
 };
 
 function loadStyle() {
@@ -68,10 +75,18 @@ function saveStyle(style) {
 const initialStyle = loadStyle();
 const textLayer = new TextLayer(initialStyle);
 const historyLayer = new HistoryLayer({ fontFamily: textLayer.fontFamily });
+// Live camera, used only to fill corpus glyphs — see renderer's video pass.
+const videoInput = new VideoInput({ source: initialStyle.videoSource });
+let videoInfluence = initialStyle.videoInfluence;
+let videoGain = initialStyle.videoGain;
 
 let renderer;
 try {
-  renderer = new Renderer(glCanvas, textLayer.canvas, historyLayer.canvas);
+  renderer = new Renderer(glCanvas, {
+    current: textLayer.canvas,
+    historyUser: historyLayer.userCanvas,
+    historyCorpus: historyLayer.corpusCanvas,
+  });
 } catch (e) {
   logError(e.message);
 }
@@ -103,6 +118,11 @@ function applyStyleToPanel(style) {
   styleCorpusFrequencyEl.value = style.corpusFrequencyHz;
   styleCorpusFrequencyVal.textContent = formatFrequency(style.corpusFrequencyHz);
   corpusSineControlsEl.hidden = style.corpusMode !== 'sine';
+  styleVideoSourceEl.value = style.videoSource;
+  styleVideoInfluenceEl.value = Math.round(style.videoInfluence * 100);
+  styleVideoInfluenceVal.textContent = `${Math.round(style.videoInfluence * 100)}%`;
+  styleVideoGainEl.value = style.videoGain;
+  styleVideoGainVal.textContent = `${style.videoGain.toFixed(1)}x`;
 }
 applyStyleToPanel(initialStyle);
 
@@ -119,6 +139,9 @@ function onStyleInput() {
     corpusBaseMs: Number(styleCorpusBaseEl.value),
     corpusAmplitudeMs: Number(styleCorpusAmplitudeEl.value),
     corpusFrequencyHz: Number(styleCorpusFrequencyEl.value),
+    videoSource: styleVideoSourceEl.value,
+    videoInfluence: Number(styleVideoInfluenceEl.value) / 100,
+    videoGain: Number(styleVideoGainEl.value),
   };
   styleWeightVal.textContent = style.fontWeight;
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
@@ -130,6 +153,17 @@ function onStyleInput() {
   styleCorpusAmplitudeVal.textContent = `${style.corpusAmplitudeMs}ms`;
   styleCorpusFrequencyVal.textContent = formatFrequency(style.corpusFrequencyHz);
   corpusSineControlsEl.hidden = style.corpusMode !== 'sine';
+  styleVideoInfluenceVal.textContent = `${Math.round(style.videoInfluence * 100)}%`;
+  styleVideoGainVal.textContent = `${style.videoGain.toFixed(1)}x`;
+  videoInfluence = style.videoInfluence;
+  videoGain = style.videoGain;
+  if (style.videoSource !== videoInput.source) {
+    videoInput.setSource(style.videoSource);
+    // Switching to the camera mid-run may need it started for the first time.
+    if (style.videoSource === 'camera' && videoInput.state !== 'live') {
+      videoInput.start().catch((e) => logError('Camera unavailable: ' + e.message));
+    }
+  }
   textLayer.setStyle(style);
   textLayer.setUserSizeScale(style.userSizeScale);
   textLayer.setTransitionMs(style.transitionMs);
@@ -145,6 +179,7 @@ function onStyleInput() {
   styleFontEl, styleWeightEl, styleSizeEl, styleUserSizeEl, styleSpacingEl,
   styleTransitionEl, styleHoldEl, styleCorpusModeEl, styleCorpusBaseEl,
   styleCorpusAmplitudeEl, styleCorpusFrequencyEl,
+  styleVideoSourceEl, styleVideoInfluenceEl, styleVideoGainEl,
 ].forEach((el) => {
   el.addEventListener('input', onStyleInput);
 });
@@ -173,9 +208,14 @@ function frame(t) {
 
   textLayer.update(dtMs);
   historyLayer.update(dtMs);
+  videoInput.update(dtMs);
   if (renderer) {
     try {
-      renderer.render();
+      renderer.render({
+        video: videoInput,
+        influence: videoInfluence,
+        gain: videoGain,
+      });
     } catch (e) {
       logError('Render error: ' + e.message);
     }
@@ -183,7 +223,12 @@ function frame(t) {
 
   if (debugOn) {
     const mode = userSpeaking ? 'speech' : 'monologue';
-    debugEl.textContent = `mode ${mode}  phase ${textLayer.phase}  alpha ${textLayer.alpha.toFixed(2)}`;
+    const cam = videoInput.error ? `error (${videoInput.error})` : videoInput.state;
+    const shading = videoInput.ready && videoInfluence > 0;
+    debugEl.textContent =
+      `mode ${mode}  phase ${textLayer.phase}  alpha ${textLayer.alpha.toFixed(2)}\n` +
+      `src ${videoInput.source}  cam ${cam}  ready ${videoInput.ready}  ${videoInput.video.videoWidth}x${videoInput.video.videoHeight}\n` +
+      `influence ${videoInfluence.toFixed(2)}  gain ${videoGain.toFixed(1)}  shading ${shading}`;
   }
 
   requestAnimationFrame(frame);
@@ -295,6 +340,9 @@ startBtn.addEventListener('click', () => {
   startOverlay.hidden = true;
   recognizer.start();
   monologue.start();
+  // Camera is optional — if it's denied or absent, the video fill just
+  // never kicks in and everything else runs exactly as before.
+  videoInput.start().catch((e) => logError('Camera unavailable: ' + e.message));
 });
 
 // Manual text injection for tech rehearsal / tuning without a live mic:

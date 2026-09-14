@@ -1,6 +1,8 @@
 // Minimal WebGL1 pipeline: composite two text canvases onto the screen —
 // the accumulated history log first (background), then the current bold
-// phrase on top (alpha-blended over it).
+// phrase on top (alpha-blended over it). The current phrase can
+// optionally be filled with a live video frame instead of flat white
+// (used for corpus text only — see VIDEO_FRAG_SRC).
 
 const VERT_SRC = `
 attribute vec2 aPos;
@@ -16,6 +18,29 @@ uniform sampler2D uTex;
 varying vec2 vUv;
 void main() {
   gl_FragColor = texture2D(uTex, vUv);
+}`;
+
+// Fills the glyphs with the video instead of flat white. uInfluence mixes
+// between the two: 0 = plain white (identical to COPY), 1 = raw video
+// fill. Because it's a mix toward white, the fill's brightness can never
+// fall below (1 - uInfluence) — that floor is what keeps the letterforms
+// readable when the video goes dark, rather than dropping out entirely.
+// The text's own alpha is untouched, so glyph shape/coverage is preserved.
+const VIDEO_FRAG_SRC = `
+precision highp float;
+uniform sampler2D uTex;
+uniform sampler2D uVideo;
+uniform float uInfluence;
+uniform float uGain;
+uniform vec2 uVideoScale; // cover-fit, so the frame isn't stretched to the canvas
+varying vec2 vUv;
+
+void main() {
+  vec4 text = texture2D(uTex, vUv);
+  vec2 videoUv = (vUv - 0.5) * uVideoScale + 0.5;
+  vec3 video = clamp(texture2D(uVideo, videoUv).rgb * uGain, 0.0, 1.0);
+  vec3 fill = mix(vec3(1.0), video, uInfluence);
+  gl_FragColor = vec4(text.rgb * fill, text.a);
 }`;
 
 function compileShader(gl, type, src) {
@@ -62,10 +87,11 @@ function createTexture(gl) {
 }
 
 export class Renderer {
-  constructor(canvas, currentCanvas, historyCanvas) {
+  constructor(canvas, { current, historyUser, historyCorpus }) {
     this.canvas = canvas;
-    this.currentCanvas = currentCanvas;
-    this.historyCanvas = historyCanvas;
+    this.currentCanvas = current;
+    this.historyUserCanvas = historyUser;
+    this.historyCorpusCanvas = historyCorpus;
 
     const gl = canvas.getContext('webgl', { antialias: true, alpha: false, preserveDrawingBuffer: false });
     if (!gl) throw new Error('WebGL is not supported in this browser.');
@@ -74,12 +100,19 @@ export class Renderer {
     this.copyProg = linkProgram(gl, VERT_SRC, COPY_FRAG_SRC);
     this.copyUniforms = uniformLocations(gl, this.copyProg, ['uTex']);
 
+    this.videoProg = linkProgram(gl, VERT_SRC, VIDEO_FRAG_SRC);
+    this.videoUniforms = uniformLocations(gl, this.videoProg, [
+      'uTex', 'uVideo', 'uInfluence', 'uGain', 'uVideoScale',
+    ]);
+
     this.quadBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 
     this.currentTex = createTexture(gl);
-    this.historyTex = createTexture(gl);
+    this.historyUserTex = createTexture(gl);
+    this.historyCorpusTex = createTexture(gl);
+    this.videoTex = createTexture(gl);
 
     this.width = 0;
     this.height = 0;
@@ -105,17 +138,48 @@ export class Renderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  _uploadAndDraw(tex, srcCanvas) {
+  _upload(tex, source, unit = 0) {
     const gl = this.gl;
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.activeTexture(gl.TEXTURE0);
+    gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, srcCanvas);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+  }
+
+  _drawPlain(tex, srcCanvas) {
+    const gl = this.gl;
+    gl.useProgram(this.copyProg);
+    this._upload(tex, srcCanvas, 0);
     gl.uniform1i(this.copyUniforms.uTex, 0);
     this._drawQuad(this.copyProg);
   }
 
-  render() {
+  // Scales the video's UVs so it covers the canvas without distortion —
+  // the overflowing axis gets cropped rather than squashed.
+  _videoCoverScale(videoAspect) {
+    const canvasAspect = this.width / this.height;
+    return videoAspect > canvasAspect
+      ? [canvasAspect / videoAspect, 1]
+      : [1, videoAspect / canvasAspect];
+  }
+
+  _drawVideoShaded(tex, srcCanvas, video, { influence, gain }) {
+    const gl = this.gl;
+    gl.useProgram(this.videoProg);
+    this._upload(tex, srcCanvas, 0);
+    gl.uniform1i(this.videoUniforms.uTex, 0);
+    this._upload(this.videoTex, video.frameSource, 1);
+    gl.uniform1i(this.videoUniforms.uVideo, 1);
+    gl.uniform1f(this.videoUniforms.uInfluence, influence);
+    gl.uniform1f(this.videoUniforms.uGain, gain);
+    const [sx, sy] = this._videoCoverScale(video.aspect);
+    gl.uniform2f(this.videoUniforms.uVideoScale, sx, sy);
+    this._drawQuad(this.videoProg);
+  }
+
+  // `video` is a VideoInput (or null). Only the corpus half of the history
+  // log is video-filled — real speech and the current phrase stay plain.
+  render({ video = null, influence = 0, gain = 1 } = {}) {
     const gl = this.gl;
     if (!this.width || !this.height) return;
 
@@ -124,12 +188,18 @@ export class Renderer {
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    gl.useProgram(this.copyProg);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    this._uploadAndDraw(this.historyTex, this.historyCanvas);
-    this._uploadAndDraw(this.currentTex, this.currentCanvas);
+    // The two history layers never overlap (each word owns its own run of
+    // the line), so their relative order doesn't matter visually.
+    if (video && video.ready && influence > 0) {
+      this._drawVideoShaded(this.historyCorpusTex, this.historyCorpusCanvas, video, { influence, gain });
+    } else {
+      this._drawPlain(this.historyCorpusTex, this.historyCorpusCanvas);
+    }
+    this._drawPlain(this.historyUserTex, this.historyUserCanvas);
+    this._drawPlain(this.currentTex, this.currentCanvas);
 
     gl.disable(gl.BLEND);
   }
