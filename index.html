@@ -17,11 +17,10 @@
 
   #status {
     position: fixed; top: 20px; right: 24px;
-    display: flex; align-items: center; gap: 8px;
-    font-size: 13px; color: #888; letter-spacing: 0.05em;
-    text-transform: uppercase; z-index: 5;
+    z-index: 5;
   }
   #dot {
+    display: inline-block;
     width: 9px; height: 9px; border-radius: 50%;
     background: #444; transition: background 0.2s;
   }
@@ -41,11 +40,6 @@
   #start button:hover { border-color: #fff; }
   #start button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  #error {
-    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-    font-size: 13px; color: #e33; max-width: 80vw; text-align: center;
-    z-index: 5;
-  }
   #debug {
     position: fixed; bottom: 8px; left: 8px;
     font-family: ui-monospace, monospace; font-size: 11px; color: #6f6;
@@ -89,9 +83,8 @@
 </head>
 <body>
   <canvas id="gl"></canvas>
-  <div id="status"><span id="dot"></span><span id="statusText">idle</span></div>
+  <div id="status"><span id="dot"></span></div>
   <div id="start"><button id="startBtn">Click to start listening</button></div>
-  <div id="error" hidden></div>
   <div id="debug" hidden></div>
 
   <div id="stylePanel" hidden>

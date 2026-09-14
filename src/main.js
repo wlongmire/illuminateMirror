@@ -7,10 +7,8 @@ import { Monologue } from './monologue.js';
 // ---- DOM --------------------------------------------------------------
 const glCanvas = document.getElementById('gl');
 const dotEl = document.getElementById('dot');
-const statusText = document.getElementById('statusText');
 const startOverlay = document.getElementById('start');
 const startBtn = document.getElementById('startBtn');
-const errorEl = document.getElementById('error');
 const debugEl = document.getElementById('debug');
 const stylePanel = document.getElementById('stylePanel');
 const styleFontEl = document.getElementById('styleFont');
@@ -29,14 +27,14 @@ const styleHoldVal = document.getElementById('styleHoldVal');
 const styleCorpusPaceEl = document.getElementById('styleCorpusPace');
 const styleCorpusPaceVal = document.getElementById('styleCorpusPaceVal');
 
-function showError(msg) {
-  errorEl.hidden = false;
-  errorEl.textContent = msg;
+// Errors don't render on screen (this runs unattended, projected) — just
+// logged for whoever's at a laptop during tech rehearsal.
+function logError(msg) {
+  console.error(msg);
 }
 
 function setLive(isLive) {
   dotEl.classList.toggle('live', isLive);
-  statusText.textContent = isLive ? 'listening' : 'idle';
 }
 
 // ---- Text style (persisted rehearsal tuning) -----------------------------
@@ -65,7 +63,7 @@ let renderer;
 try {
   renderer = new Renderer(glCanvas, textLayer.canvas, historyLayer.canvas);
 } catch (e) {
-  showError(e.message);
+  logError(e.message);
 }
 
 // ---- Style panel ----------------------------------------------------------
@@ -146,7 +144,7 @@ function frame(t) {
     try {
       renderer.render();
     } catch (e) {
-      showError('Render error: ' + e.message);
+      logError('Render error: ' + e.message);
     }
   }
 
@@ -171,7 +169,7 @@ window.addEventListener('keydown', (e) => {
 // ---- WebGL context loss: unattended runs should recover, not hang -------
 glCanvas.addEventListener('webglcontextlost', (e) => {
   e.preventDefault();
-  showError('Graphics context lost — reloading…');
+  logError('Graphics context lost — reloading…');
   setTimeout(() => window.location.reload(), 1500);
 });
 
@@ -252,7 +250,7 @@ function onSpeechResult(text, isFinal) {
 const recognizer = createSpeechRecognizer({
   onResult: onSpeechResult,
   onStateChange: setLive,
-  onError: showError,
+  onError: logError,
 });
 
 if (!recognizer.supported) {
