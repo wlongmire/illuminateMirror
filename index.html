@@ -4,9 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Illuminate Philly — Live Transcription Display</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=UnifrakturCook:wght@700&display=swap" rel="stylesheet">
 <style>
   :root { color-scheme: dark; }
   html, body {
@@ -55,6 +52,38 @@
     background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 3px;
     z-index: 5;
   }
+
+  #stylePanel {
+    position: fixed; top: 20px; left: 24px;
+    display: flex; flex-direction: column; gap: 10px;
+    font-size: 12px; color: #ccc;
+    background: rgba(0,0,0,0.75); border: 1px solid #333; border-radius: 6px;
+    padding: 14px 16px; z-index: 6; width: 220px;
+  }
+  #stylePanel h2 {
+    margin: 0 0 2px; font-size: 11px; font-weight: 600; color: #888;
+    letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  #stylePanel h3 {
+    margin: 4px 0 -4px; font-size: 10px; font-weight: 600; color: #666;
+    letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  #stylePanel hr {
+    width: 100%; border: none; border-top: 1px solid #333; margin: 2px 0;
+  }
+  #stylePanel label {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  #stylePanel .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  #stylePanel .row span:last-child { color: #6cf; font-variant-numeric: tabular-nums; }
+  #stylePanel select, #stylePanel input[type="range"] { width: 100%; }
+  #stylePanel select {
+    font: inherit; color: #ddd; background: #111; border: 1px solid #444;
+    border-radius: 3px; padding: 3px 4px;
+  }
+
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -64,6 +93,47 @@
   <div id="start"><button id="startBtn">Click to start listening</button></div>
   <div id="error" hidden></div>
   <div id="debug" hidden></div>
+
+  <div id="stylePanel" hidden>
+    <h2>Text style & timing (P to close)</h2>
+
+    <h3>Typography</h3>
+    <label>Font
+      <select id="styleFont">
+        <option value="system-ui, sans-serif">System UI</option>
+        <option value="Arial, Helvetica, sans-serif">Arial</option>
+        <option value="Georgia, serif">Georgia</option>
+        <option value="'Times New Roman', Times, serif">Times New Roman</option>
+        <option value="'Courier New', Courier, monospace">Courier New</option>
+        <option value="Verdana, sans-serif">Verdana</option>
+        <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+      </select>
+    </label>
+    <label>
+      <span class="row"><span>Weight</span><span id="styleWeightVal">700</span></span>
+      <input type="range" id="styleWeight" min="100" max="900" step="100" value="700">
+    </label>
+    <label>
+      <span class="row"><span>Size</span><span id="styleSizeVal">100%</span></span>
+      <input type="range" id="styleSize" min="50" max="200" step="5" value="100">
+    </label>
+    <label>
+      <span class="row"><span>Letter spacing</span><span id="styleSpacingVal">0px</span></span>
+      <input type="range" id="styleSpacing" min="-5" max="40" step="1" value="0">
+    </label>
+
+    <hr>
+
+    <h3>Timing</h3>
+    <label>
+      <span class="row"><span>Transition (in/out)</span><span id="styleTransitionVal">0.3s</span></span>
+      <input type="range" id="styleTransition" min="100" max="1200" step="50" value="300">
+    </label>
+    <label>
+      <span class="row"><span>Display time</span><span id="styleHoldVal">1.2s</span></span>
+      <input type="range" id="styleHold" min="300" max="6000" step="100" value="1200">
+    </label>
+  </div>
 
   <script type="module" src="/src/main.js"></script>
 </body>

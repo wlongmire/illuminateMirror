@@ -1,45 +1,7 @@
 import { createSpeechRecognizer } from './speech.js';
 import { TextLayer } from './textLayer.js';
+import { HistoryLayer } from './historyLayer.js';
 import { Renderer } from './renderer.js';
-
-// ---- Tunable ranges -------------------------------------------------------
-// Each finalized phrase nudges these targets; the render loop smoothly
-// glides toward them rather than snapping, so the piece keeps drifting
-// even between phrases instead of sitting static.
-const RANGES = {
-  segments: { min: 4, max: 16 },           // kaleidoscope wedge count
-  kaleidoRotateSpeed: { min: 0.03, max: 0.5 }, // rad/sec, mirror's own spin
-  decay: { min: 0.90, max: 0.975 },        // feedback persistence per frame
-};
-
-const BASE = {
-  zoom: 1.0,
-  feedbackScale: 0.965,   // slight scale-down each feedback pass
-  feedbackRotateSpeed: 0.18, // rad/sec, rotation compounding inside the loop
-};
-
-const SMOOTH_MS = 900; // time constant for gliding toward new targets
-
-function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
-function lerpRange(v, inLo, inHi, outLo, outHi) {
-  const t = clamp((v - inLo) / (inHi - inLo), 0, 1);
-  return outLo + t * (outHi - outLo);
-}
-
-function mapPhraseToTargets(text) {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const wordCount = words.length;
-  const charCount = text.length;
-
-  return {
-    // more words -> more mirrored wedges
-    segments: clamp(4 + Math.round(wordCount / 1.5) * 2, RANGES.segments.min, RANGES.segments.max),
-    // longer phrases spin the mirror slower/calmer; short bursts spin faster
-    kaleidoRotateSpeed: lerpRange(charCount, 10, 120, RANGES.kaleidoRotateSpeed.max, RANGES.kaleidoRotateSpeed.min),
-    // more words -> longer-lingering trails
-    decay: clamp(0.90 + wordCount * 0.006, RANGES.decay.min, RANGES.decay.max),
-  };
-}
 
 // ---- DOM --------------------------------------------------------------
 const glCanvas = document.getElementById('gl');
@@ -49,6 +11,18 @@ const startOverlay = document.getElementById('start');
 const startBtn = document.getElementById('startBtn');
 const errorEl = document.getElementById('error');
 const debugEl = document.getElementById('debug');
+const stylePanel = document.getElementById('stylePanel');
+const styleFontEl = document.getElementById('styleFont');
+const styleWeightEl = document.getElementById('styleWeight');
+const styleWeightVal = document.getElementById('styleWeightVal');
+const styleSizeEl = document.getElementById('styleSize');
+const styleSizeVal = document.getElementById('styleSizeVal');
+const styleSpacingEl = document.getElementById('styleSpacing');
+const styleSpacingVal = document.getElementById('styleSpacingVal');
+const styleTransitionEl = document.getElementById('styleTransition');
+const styleTransitionVal = document.getElementById('styleTransitionVal');
+const styleHoldEl = document.getElementById('styleHold');
+const styleHoldVal = document.getElementById('styleHoldVal');
 
 function showError(msg) {
   errorEl.hidden = false;
@@ -60,49 +34,73 @@ function setLive(isLive) {
   statusText.textContent = isLive ? 'listening' : 'idle';
 }
 
-// ---- Render/param state -------------------------------------------------
-const textLayer = new TextLayer({ fontFamily: "'UnifrakturCook', serif" });
-document.fonts.load("700 64px 'UnifrakturCook'").catch(() => {});
+// ---- Text style (persisted rehearsal tuning) -----------------------------
+const STYLE_STORAGE_KEY = 'illuminate:textStyle';
+const DEFAULT_STYLE = { fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, letterSpacing: 0, transitionMs: 300, holdMs: 1200 };
+
+function loadStyle() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STYLE_STORAGE_KEY));
+    return { ...DEFAULT_STYLE, ...saved };
+  } catch (e) {
+    return { ...DEFAULT_STYLE };
+  }
+}
+
+function saveStyle(style) {
+  try { localStorage.setItem(STYLE_STORAGE_KEY, JSON.stringify(style)); } catch (e) { /* storage unavailable */ }
+}
+
+// ---- Render state ---------------------------------------------------------
+const textLayer = new TextLayer(loadStyle());
+const historyLayer = new HistoryLayer({ fontFamily: textLayer.fontFamily });
 
 let renderer;
 try {
-  renderer = new Renderer(glCanvas, textLayer.canvas);
+  renderer = new Renderer(glCanvas, textLayer.canvas, historyLayer.canvas);
 } catch (e) {
   showError(e.message);
 }
 
-const state = {
-  segments: 6,
-  kaleidoRotateSpeed: 0.15,
-  decay: 0.93,
-};
-const targets = mapPhraseToTargets('illuminate philly');
-let kaleidoRotatePhase = 0;
-
-function smooth(current, target, dtMs) {
-  const t = 1 - Math.exp(-dtMs / SMOOTH_MS);
-  return current + (target - current) * t;
+// ---- Style panel ----------------------------------------------------------
+function applyStyleToPanel(style) {
+  styleFontEl.value = style.fontFamily;
+  styleWeightEl.value = style.fontWeight;
+  styleWeightVal.textContent = style.fontWeight;
+  styleSizeEl.value = Math.round(style.sizeScale * 100);
+  styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
+  styleSpacingEl.value = style.letterSpacing;
+  styleSpacingVal.textContent = `${style.letterSpacing}px`;
+  styleTransitionEl.value = style.transitionMs;
+  styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
+  styleHoldEl.value = style.holdMs;
+  styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
 }
+applyStyleToPanel(textLayer);
 
-function updateParams(dtMs) {
-  state.segments = smooth(state.segments, targets.segments, dtMs);
-  state.kaleidoRotateSpeed = smooth(state.kaleidoRotateSpeed, targets.kaleidoRotateSpeed, dtMs);
-  state.decay = smooth(state.decay, targets.decay, dtMs);
-
-  kaleidoRotatePhase += state.kaleidoRotateSpeed * (dtMs / 1000);
-  kaleidoRotatePhase %= Math.PI * 2;
-
-  const feedbackRotate = BASE.feedbackRotateSpeed * (dtMs / 1000);
-
-  return {
-    segments: state.segments,
-    rotate: kaleidoRotatePhase,
-    zoom: BASE.zoom,
-    decay: state.decay,
-    feedbackScale: BASE.feedbackScale,
-    feedbackRotate,
+function onStyleInput() {
+  const style = {
+    fontFamily: styleFontEl.value,
+    fontWeight: Number(styleWeightEl.value),
+    sizeScale: Number(styleSizeEl.value) / 100,
+    letterSpacing: Number(styleSpacingEl.value),
+    transitionMs: Number(styleTransitionEl.value),
+    holdMs: Number(styleHoldEl.value),
   };
+  styleWeightVal.textContent = style.fontWeight;
+  styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
+  styleSpacingVal.textContent = `${style.letterSpacing}px`;
+  styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
+  styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
+  textLayer.setStyle(style);
+  textLayer.setTransitionMs(style.transitionMs);
+  textLayer.setHoldMs(style.holdMs);
+  historyLayer.setFontFamily(style.fontFamily);
+  saveStyle(style);
 }
+[styleFontEl, styleWeightEl, styleSizeEl, styleSpacingEl, styleTransitionEl, styleHoldEl].forEach((el) => {
+  el.addEventListener('input', onStyleInput);
+});
 
 // ---- Resize -------------------------------------------------------------
 function resize() {
@@ -112,6 +110,7 @@ function resize() {
   glCanvas.style.width = window.innerWidth + 'px';
   glCanvas.style.height = window.innerHeight + 'px';
   textLayer.resize(w, h);
+  historyLayer.resize(w, h);
   if (renderer) renderer.resize(w, h);
 }
 window.addEventListener('resize', resize);
@@ -126,21 +125,17 @@ function frame(t) {
   lastT = t;
 
   textLayer.update(dtMs);
-  const renderParams = updateParams(dtMs);
+  historyLayer.update();
   if (renderer) {
     try {
-      renderer.render(renderParams);
+      renderer.render();
     } catch (e) {
       showError('Render error: ' + e.message);
     }
   }
 
   if (debugOn) {
-    debugEl.textContent =
-      `segments ${state.segments.toFixed(1)}  ` +
-      `rotSpeed ${state.kaleidoRotateSpeed.toFixed(3)}  ` +
-      `decay ${state.decay.toFixed(3)}  ` +
-      `fbScale ${BASE.feedbackScale}  fbRotSpeed ${BASE.feedbackRotateSpeed}`;
+    debugEl.textContent = `phase ${textLayer.phase}  alpha ${textLayer.alpha.toFixed(2)}`;
   }
 
   requestAnimationFrame(frame);
@@ -151,6 +146,8 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'd') {
     debugOn = !debugOn;
     debugEl.hidden = !debugOn;
+  } else if (e.key === 'p') {
+    stylePanel.hidden = !stylePanel.hidden;
   }
 });
 
@@ -162,9 +159,9 @@ glCanvas.addEventListener('webglcontextlost', (e) => {
 });
 
 // ---- Speech input -----------------------------------------------------
-function onPhrase(text) {
-  textLayer.setPhrase(text);
-  Object.assign(targets, mapPhraseToTargets(text));
+function onPhrase(text, isFinal = true) {
+  textLayer.setPhrase(text, isFinal);
+  if (isFinal) historyLayer.addPhrase(text);
 }
 
 const recognizer = createSpeechRecognizer({

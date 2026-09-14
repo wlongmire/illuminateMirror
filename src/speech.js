@@ -17,7 +17,7 @@ export function createSpeechRecognizer({ onResult, onStateChange, onError }) {
   function attach() {
     recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = false;
+    recognition.interimResults = true;
     recognition.lang = 'en-US';
 
     recognition.onstart = () => onStateChange(true);
@@ -34,7 +34,7 @@ export function createSpeechRecognizer({ onResult, onStateChange, onError }) {
     };
     recognition.onresult = (event) => {
       const result = event.results[event.results.length - 1];
-      if (result.isFinal) onResult(result[0].transcript);
+      onResult(result[0].transcript, result.isFinal);
     };
   }
 
