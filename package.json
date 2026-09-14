@@ -1,0 +1,15 @@
+{
+  "name": "illuminate-philly-live-transcribe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Live speech-to-kaleidoscope-feedback installation display for Illuminate Philly.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5173"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

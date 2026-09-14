@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Illuminate Philly — Live Transcription Display</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=UnifrakturCook:wght@700&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #000; overflow: hidden;
+  }
+  body { font-family: system-ui, sans-serif; }
+  #gl {
+    position: fixed; inset: 0; display: block;
+  }
+
+  #status {
+    position: fixed; top: 20px; right: 24px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: #888; letter-spacing: 0.05em;
+    text-transform: uppercase; z-index: 5;
+  }
+  #dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #444; transition: background 0.2s;
+  }
+  #dot.live { background: #e33; box-shadow: 0 0 8px #e33; }
+
+  #start {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: #000; color: #fff;
+    z-index: 10;
+  }
+  #start button {
+    font: inherit; font-size: 18px; padding: 14px 28px;
+    background: transparent; color: #fff; border: 1px solid #666;
+    border-radius: 4px; cursor: pointer; letter-spacing: 0.03em;
+  }
+  #start button:hover { border-color: #fff; }
+  #start button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  #error {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    font-size: 13px; color: #e33; max-width: 80vw; text-align: center;
+    z-index: 5;
+  }
+  #debug {
+    position: fixed; bottom: 8px; left: 8px;
+    font-family: ui-monospace, monospace; font-size: 11px; color: #6f6;
+    background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 3px;
+    z-index: 5;
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <div id="status"><span id="dot"></span><span id="statusText">idle</span></div>
+  <div id="start"><button id="startBtn">Click to start listening</button></div>
+  <div id="error" hidden></div>
+  <div id="debug" hidden></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
