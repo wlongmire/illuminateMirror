@@ -54,16 +54,31 @@ function tokenize(text) {
 }
 
 export class Monologue {
-  constructor({ onWord, onFinal, wordDelayMs = 300, minBurstWords = 4, maxBurstWords = 12 }) {
+  constructor({
+    onWord, onFinal, minBurstWords = 4, maxBurstWords = 12,
+    mode = 'sine', baseDelayMs = 300, minDelayMs = 20, amplitudeMs = 150, frequencyHz = 0.2,
+  }) {
     // Fires once per word, immediately — this module never hands out more
     // than one word at a time; callers that want a growing phrase (rather
     // than each word replacing the last) build that up themselves.
     this.onWord = onWord;
     // Fires once an utterance's random word-burst completes.
     this.onFinal = onFinal;
-    this.wordDelayMs = wordDelayMs;
     this.minBurstWords = minBurstWords;
     this.maxBurstWords = maxBurstWords;
+
+    // 'sine': the per-word delay rides a wave around baseDelayMs, so the
+    // pace continuously speeds up and slows down (animates by default).
+    // 'linear': a flat, constant baseDelayMs — no variation.
+    this.mode = mode;
+    this.baseDelayMs = baseDelayMs;
+    this.minDelayMs = minDelayMs; // floor, so a large amplitude can't reach zero/negative
+    this.amplitudeMs = amplitudeMs;
+    this.frequencyHz = frequencyHz;
+    // Accumulated "active" time (ms) driving the sine phase — only
+    // advances while actually running and unpaused, so pausing freezes
+    // the wave in place instead of it jumping ahead on resume.
+    this.phaseMs = 0;
 
     this.words = tokenize(LOREM_IPSUM);
     this.wordIndex = 0;
@@ -107,15 +122,34 @@ export class Monologue {
     this.timeoutId = null;
   }
 
-  // Reschedules the pending word immediately at the new pace, rather than
-  // waiting for the current (possibly much longer) wait to finish first —
-  // so a live speed slider feels responsive right away.
-  setWordDelayMs(ms) {
-    this.wordDelayMs = ms;
+  // Reschedule the pending word immediately at the newly-computed pace,
+  // rather than waiting for the current (possibly much longer) wait to
+  // finish first — so a live slider feels responsive right away.
+  _reschedule() {
     if (this.running && !this.paused) {
       clearTimeout(this.timeoutId);
       this._scheduleNext();
     }
+  }
+
+  setMode(mode) {
+    this.mode = mode;
+    this._reschedule();
+  }
+
+  setBaseDelayMs(ms) {
+    this.baseDelayMs = ms;
+    this._reschedule();
+  }
+
+  setAmplitudeMs(ms) {
+    this.amplitudeMs = ms;
+    this._reschedule();
+  }
+
+  setFrequencyHz(hz) {
+    this.frequencyHz = hz;
+    this._reschedule();
   }
 
   resume() {
@@ -127,8 +161,24 @@ export class Monologue {
     this._scheduleNext();
   }
 
+  // 'linear': flat baseDelayMs. 'sine': baseDelayMs + a wave of
+  // amplitudeMs, frequencyHz cycles/sec. Always clamped so it can never
+  // dip to zero/negative regardless of amplitude.
+  _currentDelayMs() {
+    if (this.mode === 'linear') {
+      return Math.max(this.minDelayMs, this.baseDelayMs);
+    }
+    const phaseSec = this.phaseMs / 1000;
+    const wave = this.amplitudeMs * Math.sin(2 * Math.PI * this.frequencyHz * phaseSec);
+    return Math.max(this.minDelayMs, this.baseDelayMs + wave);
+  }
+
   _scheduleNext() {
-    this.timeoutId = setTimeout(() => this._tick(), this.wordDelayMs);
+    const delay = this._currentDelayMs();
+    this.timeoutId = setTimeout(() => {
+      this.phaseMs += delay;
+      this._tick();
+    }, delay);
   }
 
   _tick() {

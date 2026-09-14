@@ -68,6 +68,9 @@
   #stylePanel label {
     display: flex; flex-direction: column; gap: 4px;
   }
+  #corpusSineControls {
+    display: flex; flex-direction: column; gap: 10px;
+  }
   #stylePanel .row {
     display: flex; justify-content: space-between; align-items: baseline;
   }
@@ -130,10 +133,26 @@
       <span class="row"><span>Display time</span><span id="styleHoldVal">1.2s</span></span>
       <input type="range" id="styleHold" min="300" max="6000" step="100" value="1200">
     </label>
-    <label>
-      <span class="row"><span>Corpus pace</span><span id="styleCorpusPaceVal">300ms/word</span></span>
-      <input type="range" id="styleCorpusPace" min="20" max="1000" step="10" value="300">
+    <label>Corpus pace mode
+      <select id="styleCorpusMode">
+        <option value="sine">Sine wave (varies over time)</option>
+        <option value="linear">Linear (constant)</option>
+      </select>
     </label>
+    <label>
+      <span class="row"><span>Corpus pace</span><span id="styleCorpusBaseVal">300ms/word</span></span>
+      <input type="range" id="styleCorpusBase" min="20" max="1000" step="10" value="300">
+    </label>
+    <div id="corpusSineControls">
+      <label>
+        <span class="row"><span>Corpus pace amplitude</span><span id="styleCorpusAmplitudeVal">150ms</span></span>
+        <input type="range" id="styleCorpusAmplitude" min="0" max="280" step="10" value="150">
+      </label>
+      <label>
+        <span class="row"><span>Corpus pace frequency</span><span id="styleCorpusFrequencyVal">0.20Hz (5.0s)</span></span>
+        <input type="range" id="styleCorpusFrequency" min="0.02" max="1" step="0.02" value="0.2">
+      </label>
+    </div>
   </div>
 
   <script type="module" src="/src/main.js"></script>

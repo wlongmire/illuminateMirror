@@ -24,8 +24,14 @@ const styleTransitionEl = document.getElementById('styleTransition');
 const styleTransitionVal = document.getElementById('styleTransitionVal');
 const styleHoldEl = document.getElementById('styleHold');
 const styleHoldVal = document.getElementById('styleHoldVal');
-const styleCorpusPaceEl = document.getElementById('styleCorpusPace');
-const styleCorpusPaceVal = document.getElementById('styleCorpusPaceVal');
+const styleCorpusModeEl = document.getElementById('styleCorpusMode');
+const styleCorpusBaseEl = document.getElementById('styleCorpusBase');
+const styleCorpusBaseVal = document.getElementById('styleCorpusBaseVal');
+const styleCorpusAmplitudeEl = document.getElementById('styleCorpusAmplitude');
+const styleCorpusAmplitudeVal = document.getElementById('styleCorpusAmplitudeVal');
+const styleCorpusFrequencyEl = document.getElementById('styleCorpusFrequency');
+const styleCorpusFrequencyVal = document.getElementById('styleCorpusFrequencyVal');
+const corpusSineControlsEl = document.getElementById('corpusSineControls');
 
 // Errors don't render on screen (this runs unattended, projected) — just
 // logged for whoever's at a laptop during tech rehearsal.
@@ -39,7 +45,11 @@ function setLive(isLive) {
 
 // ---- Text style (persisted rehearsal tuning) -----------------------------
 const STYLE_STORAGE_KEY = 'illuminate:textStyle';
-const DEFAULT_STYLE = { fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, userSizeScale: 1, letterSpacing: 0, transitionMs: 300, holdMs: 1200, corpusPaceMs: 300 };
+const DEFAULT_STYLE = {
+  fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, userSizeScale: 1, letterSpacing: 0,
+  transitionMs: 300, holdMs: 1200,
+  corpusMode: 'sine', corpusBaseMs: 300, corpusAmplitudeMs: 150, corpusFrequencyHz: 0.2,
+};
 
 function loadStyle() {
   try {
@@ -67,6 +77,10 @@ try {
 }
 
 // ---- Style panel ----------------------------------------------------------
+function formatFrequency(hz) {
+  return `${hz.toFixed(2)}Hz (${(1 / hz).toFixed(1)}s)`;
+}
+
 function applyStyleToPanel(style) {
   styleFontEl.value = style.fontFamily;
   styleWeightEl.value = style.fontWeight;
@@ -81,8 +95,14 @@ function applyStyleToPanel(style) {
   styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
   styleHoldEl.value = style.holdMs;
   styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
-  styleCorpusPaceEl.value = style.corpusPaceMs;
-  styleCorpusPaceVal.textContent = `${style.corpusPaceMs}ms/word`;
+  styleCorpusModeEl.value = style.corpusMode;
+  styleCorpusBaseEl.value = style.corpusBaseMs;
+  styleCorpusBaseVal.textContent = `${style.corpusBaseMs}ms/word`;
+  styleCorpusAmplitudeEl.value = style.corpusAmplitudeMs;
+  styleCorpusAmplitudeVal.textContent = `${style.corpusAmplitudeMs}ms`;
+  styleCorpusFrequencyEl.value = style.corpusFrequencyHz;
+  styleCorpusFrequencyVal.textContent = formatFrequency(style.corpusFrequencyHz);
+  corpusSineControlsEl.hidden = style.corpusMode !== 'sine';
 }
 applyStyleToPanel(initialStyle);
 
@@ -95,7 +115,10 @@ function onStyleInput() {
     letterSpacing: Number(styleSpacingEl.value),
     transitionMs: Number(styleTransitionEl.value),
     holdMs: Number(styleHoldEl.value),
-    corpusPaceMs: Number(styleCorpusPaceEl.value),
+    corpusMode: styleCorpusModeEl.value,
+    corpusBaseMs: Number(styleCorpusBaseEl.value),
+    corpusAmplitudeMs: Number(styleCorpusAmplitudeEl.value),
+    corpusFrequencyHz: Number(styleCorpusFrequencyEl.value),
   };
   styleWeightVal.textContent = style.fontWeight;
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
@@ -103,16 +126,26 @@ function onStyleInput() {
   styleSpacingVal.textContent = `${style.letterSpacing}px`;
   styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
   styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
-  styleCorpusPaceVal.textContent = `${style.corpusPaceMs}ms/word`;
+  styleCorpusBaseVal.textContent = `${style.corpusBaseMs}ms/word`;
+  styleCorpusAmplitudeVal.textContent = `${style.corpusAmplitudeMs}ms`;
+  styleCorpusFrequencyVal.textContent = formatFrequency(style.corpusFrequencyHz);
+  corpusSineControlsEl.hidden = style.corpusMode !== 'sine';
   textLayer.setStyle(style);
   textLayer.setUserSizeScale(style.userSizeScale);
   textLayer.setTransitionMs(style.transitionMs);
   textLayer.setHoldMs(style.holdMs);
   historyLayer.setFontFamily(style.fontFamily);
-  monologue.setWordDelayMs(style.corpusPaceMs);
+  monologue.setMode(style.corpusMode);
+  monologue.setBaseDelayMs(style.corpusBaseMs);
+  monologue.setAmplitudeMs(style.corpusAmplitudeMs);
+  monologue.setFrequencyHz(style.corpusFrequencyHz);
   saveStyle(style);
 }
-[styleFontEl, styleWeightEl, styleSizeEl, styleUserSizeEl, styleSpacingEl, styleTransitionEl, styleHoldEl, styleCorpusPaceEl].forEach((el) => {
+[
+  styleFontEl, styleWeightEl, styleSizeEl, styleUserSizeEl, styleSpacingEl,
+  styleTransitionEl, styleHoldEl, styleCorpusModeEl, styleCorpusBaseEl,
+  styleCorpusAmplitudeEl, styleCorpusFrequencyEl,
+].forEach((el) => {
   el.addEventListener('input', onStyleInput);
 });
 
@@ -174,29 +207,27 @@ glCanvas.addEventListener('webglcontextlost', (e) => {
 });
 
 // ---- Speech input -----------------------------------------------------
-// The big center phrase only ever shows the live, in-progress transcript
-// of the utterance being spoken — never the finalized wording. Once an
-// utterance finalizes, it goes to the history log and the big phrase
-// dismisses instead of displaying (or holding on) the completed text.
-// History is streamed in per word too, as the transcript grows, rather
-// than waiting for the whole utterance to finish: only the words newly
-// added since the last call are pushed. (Real speech can occasionally
-// revise earlier interim words — a revision after a word has already
-// landed in the append-only history log isn't reflected there.)
+// Both the big center phrase and the history log only ever capture the
+// live, in-progress transcript — never the finalized wording. History is
+// streamed in per word as the interim transcript grows (only the words
+// newly added since the last call are pushed); the final result itself
+// adds nothing new, it just closes out whatever was already streamed.
+// Real speech can occasionally revise or extend the wording right at
+// finalization — that revision is deliberately not reflected here, since
+// it was never shown live.
 let spokenWordCount = 0;
 
 function onPhrase(text, isFinal) {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  words.slice(spokenWordCount).forEach((word, i) => {
-    historyLayer.addWord(word, { firstOfUtterance: spokenWordCount === 0 && i === 0 });
-  });
-  spokenWordCount = words.length;
-
   if (isFinal) {
     historyLayer.endUtterance();
     textLayer.finishUtterance();
     spokenWordCount = 0;
   } else {
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    words.slice(spokenWordCount).forEach((word, i) => {
+      historyLayer.addWord(word, { firstOfUtterance: spokenWordCount === 0 && i === 0 });
+    });
+    spokenWordCount = words.length;
     textLayer.setPhrase(text, { dim: false });
   }
 }
@@ -214,7 +245,10 @@ let userSpeaking = false;
 let resumeTimer = null;
 
 const monologue = new Monologue({
-  wordDelayMs: initialStyle.corpusPaceMs,
+  mode: initialStyle.corpusMode,
+  baseDelayMs: initialStyle.corpusBaseMs,
+  amplitudeMs: initialStyle.corpusAmplitudeMs,
+  frequencyHz: initialStyle.corpusFrequencyHz,
   onWord: (word, meta) => {
     historyLayer.addWord(word, { ...meta, source: 'corpus' });
     textLayer.setPhrase(word, { dim: true });
