@@ -80,10 +80,10 @@ export class TextLayer {
     // of re-triggering the crossfade.
     this.utteranceActive = false;
     // Whether the utterance currently on screen came from the corpus
-    // monologue rather than real speech — rendered dimmer and smaller
-    // either way, so real speech reads as the more dramatic arrival.
+    // monologue rather than real speech — rendered smaller either way
+    // (both render at full opacity), so real speech still reads as the
+    // more dramatic arrival.
     this.dim = false;
-    this.dimAlphaScale = 0.45;
     this.dimSizeScale = 0.8;
     // Extra multiplier on top of sizeScale, applied to real speech only
     // (corpus size is governed by dimSizeScale instead) — lets the user
@@ -275,8 +275,7 @@ export class TextLayer {
     ctx.font = `${this.fontWeight} ${fontSize}px ${this.fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const renderAlpha = this.dim ? this.alpha * this.dimAlphaScale : this.alpha;
-    ctx.fillStyle = `rgba(255, 255, 255, ${renderAlpha})`;
+    ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha})`;
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${this.letterSpacing}px`;
 
     const totalHeight = lines.length * lineHeight;

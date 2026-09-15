@@ -9,6 +9,7 @@ import { MicVolumeMeter } from './micVolume.js';
 
 // ---- DOM --------------------------------------------------------------
 const glCanvas = document.getElementById('gl');
+const frameOverlayEl = document.getElementById('frameOverlay');
 const dotEl = document.getElementById('dot');
 const startOverlay = document.getElementById('start');
 const startBtn = document.getElementById('startBtn');
@@ -279,12 +280,55 @@ function onStyleInput() {
 });
 
 // ---- Resize -------------------------------------------------------------
+// Frame overlay: a decorative picture-frame image (public/images/frame.png)
+// that can be toggled on to letterbox the whole piece inside its inner
+// window. FRAME_WINDOW is that window's box as a fraction of the frame
+// image's own 1366x768 canvas — measured directly off the PNG's alpha
+// channel (where the hand-drawn inner border sits), with a small inward
+// margin so content sits just inside the line rather than touching it.
+const FRAME_ASPECT = 1366 / 768;
+const FRAME_WINDOW = { left: 0.332, top: 0.190, width: 0.304, height: 0.655 };
+let frameEnabled = false;
+
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  const w = Math.round(window.innerWidth * dpr);
-  const h = Math.round(window.innerHeight * dpr);
-  glCanvas.style.width = window.innerWidth + 'px';
-  glCanvas.style.height = window.innerHeight + 'px';
+  let boxW = window.innerWidth;
+  let boxH = window.innerHeight;
+
+  if (frameEnabled) {
+    // Largest frame-image-shaped box that fits the viewport (same math as
+    // CSS object-fit: contain), centered — the piece then only occupies
+    // the window cut into that box, same fraction regardless of size.
+    const viewportAspect = window.innerWidth / window.innerHeight;
+    const stageW = viewportAspect > FRAME_ASPECT ? window.innerHeight * FRAME_ASPECT : window.innerWidth;
+    const stageH = viewportAspect > FRAME_ASPECT ? window.innerHeight : window.innerWidth / FRAME_ASPECT;
+    const stageLeft = (window.innerWidth - stageW) / 2;
+    const stageTop = (window.innerHeight - stageH) / 2;
+
+    frameOverlayEl.style.left = `${stageLeft}px`;
+    frameOverlayEl.style.top = `${stageTop}px`;
+    frameOverlayEl.style.width = `${stageW}px`;
+    frameOverlayEl.style.height = `${stageH}px`;
+
+    boxW = FRAME_WINDOW.width * stageW;
+    boxH = FRAME_WINDOW.height * stageH;
+    glCanvas.style.left = `${stageLeft + FRAME_WINDOW.left * stageW}px`;
+    glCanvas.style.top = `${stageTop + FRAME_WINDOW.top * stageH}px`;
+    glCanvas.style.right = 'auto';
+    glCanvas.style.bottom = 'auto';
+  } else {
+    // Falls back to the plain inset:0 rule in index.html — full viewport,
+    // exactly the pre-frame-feature behavior.
+    glCanvas.style.left = '';
+    glCanvas.style.top = '';
+    glCanvas.style.right = '';
+    glCanvas.style.bottom = '';
+  }
+
+  const w = Math.round(boxW * dpr);
+  const h = Math.round(boxH * dpr);
+  glCanvas.style.width = boxW + 'px';
+  glCanvas.style.height = boxH + 'px';
   textLayer.resize(w, h);
   historyLayer.resize(w, h);
   if (renderer) renderer.resize(w, h);
@@ -325,7 +369,8 @@ function frame(t) {
       `mode ${mode}  phase ${textLayer.phase}  alpha ${textLayer.alpha.toFixed(2)}\n` +
       `src ${videoInput.source}  cam ${cam}  ready ${videoInput.ready}  ${videoInput.video.videoWidth}x${videoInput.video.videoHeight}\n` +
       `influence ${videoInfluence.toFixed(2)}  gain ${videoGain.toFixed(1)}  shading ${shading}\n` +
-      `midi ${midi} (${midiOutput.portName ?? 'no port'})  mic ${mic}  level ${micVolume.db.toFixed(1)}dB  vel ${micVolume.getVelocity(micFloorDb, micCeilDb)}`;
+      `midi ${midi} (${midiOutput.portName ?? 'no port'})  mic ${mic}  level ${micVolume.db.toFixed(1)}dB  vel ${micVolume.getVelocity(micFloorDb, micCeilDb)}\n` +
+      `frame ${frameEnabled ? 'on' : 'off'} (f to toggle)`;
   }
 
   requestAnimationFrame(frame);
@@ -338,6 +383,10 @@ window.addEventListener('keydown', (e) => {
     debugEl.hidden = !debugOn;
   } else if (e.key === 'p') {
     stylePanel.hidden = !stylePanel.hidden;
+  } else if (e.key === 'f') {
+    frameEnabled = !frameEnabled;
+    frameOverlayEl.hidden = !frameEnabled;
+    resize();
   }
 });
 

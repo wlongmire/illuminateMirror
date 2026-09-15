@@ -15,6 +15,13 @@
     position: fixed; inset: 0; display: block;
   }
 
+  /* Left/top/width/height are set by main.js to match the frame image's
+     own letterboxed box — left as inset:0 here so the frame-off state
+     (the default) needs no JS override at all to fill the viewport. */
+  #frameOverlay {
+    position: fixed; pointer-events: none; z-index: 4;
+  }
+
   #status {
     position: fixed; top: 20px; right: 24px;
     z-index: 5;
@@ -87,6 +94,7 @@
 </head>
 <body>
   <canvas id="gl"></canvas>
+  <img id="frameOverlay" src="/images/frame.png" alt="" hidden>
   <div id="status"><span id="dot"></span></div>
   <div id="start"><button id="startBtn">Click to start listening</button></div>
   <div id="debug" hidden></div>
