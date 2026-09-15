@@ -124,6 +124,18 @@
 
     <hr>
 
+    <h3>Brightness (history log)</h3>
+    <label>
+      <span class="row"><span>Corpus text</span><span id="styleCorpusAlphaVal">40%</span></span>
+      <input type="range" id="styleCorpusAlpha" min="0" max="100" step="5" value="40">
+    </label>
+    <label>
+      <span class="row"><span>Spoken text</span><span id="styleUserAlphaVal">65%</span></span>
+      <input type="range" id="styleUserAlpha" min="0" max="100" step="5" value="65">
+    </label>
+
+    <hr>
+
     <h3>Timing</h3>
     <label>
       <span class="row"><span>Transition (in/out)</span><span id="styleTransitionVal">0.3s</span></span>
@@ -156,7 +168,7 @@
 
     <hr>
 
-    <h3>Video fill (corpus text)</h3>
+    <h3>Video fill (history log)</h3>
     <label>Source
       <select id="styleVideoSource">
         <option value="camera">Camera</option>
@@ -170,6 +182,22 @@
     <label>
       <span class="row"><span>Gain</span><span id="styleVideoGainVal">1.0x</span></span>
       <input type="range" id="styleVideoGain" min="1" max="4" step="0.1" value="1">
+    </label>
+
+    <hr>
+
+    <h3>MIDI (one note per word, out to IAC)</h3>
+    <label>
+      <span class="row"><span>Corpus velocity</span><span id="styleCorpusVelocityVal">90</span></span>
+      <input type="range" id="styleCorpusVelocity" min="1" max="127" step="1" value="90">
+    </label>
+    <label>
+      <span class="row"><span>Mic floor</span><span id="styleMicFloorVal">-50dB</span></span>
+      <input type="range" id="styleMicFloor" min="-70" max="-20" step="1" value="-50">
+    </label>
+    <label>
+      <span class="row"><span>Mic ceiling</span><span id="styleMicCeilVal">-12dB</span></span>
+      <input type="range" id="styleMicCeil" min="-30" max="0" step="1" value="-12">
     </label>
   </div>
 

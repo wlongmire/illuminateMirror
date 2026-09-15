@@ -1,8 +1,13 @@
-// Minimal WebGL1 pipeline: composite two text canvases onto the screen —
-// the accumulated history log first (background), then the current bold
-// phrase on top (alpha-blended over it). The current phrase can
-// optionally be filled with a live video frame instead of flat white
-// (used for corpus text only — see VIDEO_FRAG_SRC).
+// Minimal WebGL1 pipeline: composite the two history layers and the
+// current phrase onto the screen (alpha-blended, history first). The
+// user-text history layer can be filled with a live video/pattern source
+// instead of flat white — see VIDEO_FRAG_SRC; user text is drawn as a
+// white highlight box with solid black knockout text on top
+// (historyLayer.js), so the fill shows through the box while the black
+// text stays black regardless (anything multiplied by black is still
+// black). Corpus text's video fill is disabled for now (always plain) —
+// _drawVideoShaded still works on it too, so re-enabling it later is just
+// swapping its render() call back to _drawHistoryLayer.
 
 const VERT_SRC = `
 attribute vec2 aPos;
@@ -177,8 +182,19 @@ export class Renderer {
     this._drawQuad(this.videoProg);
   }
 
-  // `video` is a VideoInput (or null). Only the corpus half of the history
-  // log is video-filled — real speech and the current phrase stay plain.
+  // Draws whichever pass is appropriate given whether video is actually
+  // available right now — falls back to plain so the layer still renders
+  // (just without the fill) if the camera/test source isn't ready yet.
+  _drawHistoryLayer(tex, srcCanvas, video, influence, gain) {
+    if (video && video.ready && influence > 0) {
+      this._drawVideoShaded(tex, srcCanvas, video, { influence, gain });
+    } else {
+      this._drawPlain(tex, srcCanvas);
+    }
+  }
+
+  // `video` is a VideoInput (or null), shared by both history layers.
+  // The current phrase stays plain.
   render({ video = null, influence = 0, gain = 1 } = {}) {
     const gl = this.gl;
     if (!this.width || !this.height) return;
@@ -193,12 +209,10 @@ export class Renderer {
 
     // The two history layers never overlap (each word owns its own run of
     // the line), so their relative order doesn't matter visually.
-    if (video && video.ready && influence > 0) {
-      this._drawVideoShaded(this.historyCorpusTex, this.historyCorpusCanvas, video, { influence, gain });
-    } else {
-      this._drawPlain(this.historyCorpusTex, this.historyCorpusCanvas);
-    }
-    this._drawPlain(this.historyUserTex, this.historyUserCanvas);
+    // Corpus text's video fill is off for now — always plain — while the
+    // user-text highlight box keeps it.
+    this._drawPlain(this.historyCorpusTex, this.historyCorpusCanvas);
+    this._drawHistoryLayer(this.historyUserTex, this.historyUserCanvas, video, influence, gain);
     this._drawPlain(this.currentTex, this.currentCanvas);
 
     gl.disable(gl.BLEND);

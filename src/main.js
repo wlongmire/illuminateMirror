@@ -4,6 +4,8 @@ import { HistoryLayer } from './historyLayer.js';
 import { Renderer } from './renderer.js';
 import { Monologue } from './monologue.js';
 import { VideoInput } from './videoInput.js';
+import { MidiOutput } from './midiOutput.js';
+import { MicVolumeMeter } from './micVolume.js';
 
 // ---- DOM --------------------------------------------------------------
 const glCanvas = document.getElementById('gl');
@@ -25,6 +27,10 @@ const styleTransitionEl = document.getElementById('styleTransition');
 const styleTransitionVal = document.getElementById('styleTransitionVal');
 const styleHoldEl = document.getElementById('styleHold');
 const styleHoldVal = document.getElementById('styleHoldVal');
+const styleCorpusAlphaEl = document.getElementById('styleCorpusAlpha');
+const styleCorpusAlphaVal = document.getElementById('styleCorpusAlphaVal');
+const styleUserAlphaEl = document.getElementById('styleUserAlpha');
+const styleUserAlphaVal = document.getElementById('styleUserAlphaVal');
 const styleCorpusModeEl = document.getElementById('styleCorpusMode');
 const styleCorpusBaseEl = document.getElementById('styleCorpusBase');
 const styleCorpusBaseVal = document.getElementById('styleCorpusBaseVal');
@@ -38,6 +44,12 @@ const styleVideoInfluenceEl = document.getElementById('styleVideoInfluence');
 const styleVideoInfluenceVal = document.getElementById('styleVideoInfluenceVal');
 const styleVideoGainEl = document.getElementById('styleVideoGain');
 const styleVideoGainVal = document.getElementById('styleVideoGainVal');
+const styleCorpusVelocityEl = document.getElementById('styleCorpusVelocity');
+const styleCorpusVelocityVal = document.getElementById('styleCorpusVelocityVal');
+const styleMicFloorEl = document.getElementById('styleMicFloor');
+const styleMicFloorVal = document.getElementById('styleMicFloorVal');
+const styleMicCeilEl = document.getElementById('styleMicCeil');
+const styleMicCeilVal = document.getElementById('styleMicCeilVal');
 
 // Errors don't render on screen (this runs unattended, projected) — just
 // logged for whoever's at a laptop during tech rehearsal.
@@ -56,6 +68,10 @@ const DEFAULT_STYLE = {
   transitionMs: 300, holdMs: 1200,
   corpusMode: 'sine', corpusBaseMs: 300, corpusAmplitudeMs: 150, corpusFrequencyHz: 0.2,
   videoSource: 'camera', videoInfluence: 0, videoGain: 1,
+  corpusAlpha: 0.4, userAlpha: 0.65,
+  // MIDI: user-note velocity comes from live mic level (calibrated by the
+  // floor/ceiling dB range below); corpus notes use a fixed velocity.
+  corpusVelocity: 90, micFloorDb: -50, micCeilDb: -12,
 };
 
 function loadStyle() {
@@ -74,11 +90,25 @@ function saveStyle(style) {
 // ---- Render state ---------------------------------------------------------
 const initialStyle = loadStyle();
 const textLayer = new TextLayer(initialStyle);
-const historyLayer = new HistoryLayer({ fontFamily: textLayer.fontFamily });
-// Live camera, used only to fill corpus glyphs — see renderer's video pass.
+const historyLayer = new HistoryLayer({
+  fontFamily: textLayer.fontFamily,
+  corpusAlpha: initialStyle.corpusAlpha,
+  userAlpha: initialStyle.userAlpha,
+});
+// Live camera (or test pattern), used to fill both history layers — see
+// renderer's video pass.
 const videoInput = new VideoInput({ source: initialStyle.videoSource });
 let videoInfluence = initialStyle.videoInfluence;
 let videoGain = initialStyle.videoGain;
+
+// MIDI out (one note per word, to an IAC bus) + a second, independent mic
+// stream used only to read the live input level for user-note velocity —
+// the Web Speech API itself carries no volume information.
+const midiOutput = new MidiOutput();
+const micVolume = new MicVolumeMeter();
+let corpusVelocity = initialStyle.corpusVelocity;
+let micFloorDb = initialStyle.micFloorDb;
+let micCeilDb = initialStyle.micCeilDb;
 
 let renderer;
 try {
@@ -110,6 +140,10 @@ function applyStyleToPanel(style) {
   styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
   styleHoldEl.value = style.holdMs;
   styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
+  styleCorpusAlphaEl.value = Math.round(style.corpusAlpha * 100);
+  styleCorpusAlphaVal.textContent = `${Math.round(style.corpusAlpha * 100)}%`;
+  styleUserAlphaEl.value = Math.round(style.userAlpha * 100);
+  styleUserAlphaVal.textContent = `${Math.round(style.userAlpha * 100)}%`;
   styleCorpusModeEl.value = style.corpusMode;
   styleCorpusBaseEl.value = style.corpusBaseMs;
   styleCorpusBaseVal.textContent = `${style.corpusBaseMs}ms/word`;
@@ -123,6 +157,12 @@ function applyStyleToPanel(style) {
   styleVideoInfluenceVal.textContent = `${Math.round(style.videoInfluence * 100)}%`;
   styleVideoGainEl.value = style.videoGain;
   styleVideoGainVal.textContent = `${style.videoGain.toFixed(1)}x`;
+  styleCorpusVelocityEl.value = style.corpusVelocity;
+  styleCorpusVelocityVal.textContent = style.corpusVelocity;
+  styleMicFloorEl.value = style.micFloorDb;
+  styleMicFloorVal.textContent = `${style.micFloorDb}dB`;
+  styleMicCeilEl.value = style.micCeilDb;
+  styleMicCeilVal.textContent = `${style.micCeilDb}dB`;
 }
 applyStyleToPanel(initialStyle);
 
@@ -135,6 +175,8 @@ function onStyleInput() {
     letterSpacing: Number(styleSpacingEl.value),
     transitionMs: Number(styleTransitionEl.value),
     holdMs: Number(styleHoldEl.value),
+    corpusAlpha: Number(styleCorpusAlphaEl.value) / 100,
+    userAlpha: Number(styleUserAlphaEl.value) / 100,
     corpusMode: styleCorpusModeEl.value,
     corpusBaseMs: Number(styleCorpusBaseEl.value),
     corpusAmplitudeMs: Number(styleCorpusAmplitudeEl.value),
@@ -142,6 +184,9 @@ function onStyleInput() {
     videoSource: styleVideoSourceEl.value,
     videoInfluence: Number(styleVideoInfluenceEl.value) / 100,
     videoGain: Number(styleVideoGainEl.value),
+    corpusVelocity: Number(styleCorpusVelocityEl.value),
+    micFloorDb: Number(styleMicFloorEl.value),
+    micCeilDb: Number(styleMicCeilEl.value),
   };
   styleWeightVal.textContent = style.fontWeight;
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
@@ -157,6 +202,12 @@ function onStyleInput() {
   styleVideoGainVal.textContent = `${style.videoGain.toFixed(1)}x`;
   videoInfluence = style.videoInfluence;
   videoGain = style.videoGain;
+  styleCorpusVelocityVal.textContent = style.corpusVelocity;
+  styleMicFloorVal.textContent = `${style.micFloorDb}dB`;
+  styleMicCeilVal.textContent = `${style.micCeilDb}dB`;
+  corpusVelocity = style.corpusVelocity;
+  micFloorDb = style.micFloorDb;
+  micCeilDb = style.micCeilDb;
   if (style.videoSource !== videoInput.source) {
     videoInput.setSource(style.videoSource);
     // Switching to the camera mid-run may need it started for the first time.
@@ -168,7 +219,10 @@ function onStyleInput() {
   textLayer.setUserSizeScale(style.userSizeScale);
   textLayer.setTransitionMs(style.transitionMs);
   textLayer.setHoldMs(style.holdMs);
+  styleCorpusAlphaVal.textContent = `${Math.round(style.corpusAlpha * 100)}%`;
+  styleUserAlphaVal.textContent = `${Math.round(style.userAlpha * 100)}%`;
   historyLayer.setFontFamily(style.fontFamily);
+  historyLayer.setBrightness({ corpusAlpha: style.corpusAlpha, userAlpha: style.userAlpha });
   monologue.setMode(style.corpusMode);
   monologue.setBaseDelayMs(style.corpusBaseMs);
   monologue.setAmplitudeMs(style.corpusAmplitudeMs);
@@ -180,6 +234,8 @@ function onStyleInput() {
   styleTransitionEl, styleHoldEl, styleCorpusModeEl, styleCorpusBaseEl,
   styleCorpusAmplitudeEl, styleCorpusFrequencyEl,
   styleVideoSourceEl, styleVideoInfluenceEl, styleVideoGainEl,
+  styleCorpusAlphaEl, styleUserAlphaEl,
+  styleCorpusVelocityEl, styleMicFloorEl, styleMicCeilEl,
 ].forEach((el) => {
   el.addEventListener('input', onStyleInput);
 });
@@ -225,10 +281,13 @@ function frame(t) {
     const mode = userSpeaking ? 'speech' : 'monologue';
     const cam = videoInput.error ? `error (${videoInput.error})` : videoInput.state;
     const shading = videoInput.ready && videoInfluence > 0;
+    const midi = midiOutput.error ? `error (${midiOutput.error})` : midiOutput.state;
+    const mic = micVolume.error ? `error (${micVolume.error})` : micVolume.state;
     debugEl.textContent =
       `mode ${mode}  phase ${textLayer.phase}  alpha ${textLayer.alpha.toFixed(2)}\n` +
       `src ${videoInput.source}  cam ${cam}  ready ${videoInput.ready}  ${videoInput.video.videoWidth}x${videoInput.video.videoHeight}\n` +
-      `influence ${videoInfluence.toFixed(2)}  gain ${videoGain.toFixed(1)}  shading ${shading}`;
+      `influence ${videoInfluence.toFixed(2)}  gain ${videoGain.toFixed(1)}  shading ${shading}\n` +
+      `midi ${midi} (${midiOutput.portName ?? 'no port'})  mic ${mic}  level ${micVolume.db.toFixed(1)}dB  vel ${micVolume.getVelocity(micFloorDb, micCeilDb)}`;
   }
 
   requestAnimationFrame(frame);
@@ -271,6 +330,7 @@ function onPhrase(text, isFinal) {
     const words = text.trim().split(/\s+/).filter(Boolean);
     words.slice(spokenWordCount).forEach((word, i) => {
       historyLayer.addWord(word, { firstOfUtterance: spokenWordCount === 0 && i === 0 });
+      midiOutput.sendWordNote(word, 'user', micVolume.getVelocity(micFloorDb, micCeilDb));
     });
     spokenWordCount = words.length;
     textLayer.setPhrase(text, { dim: false });
@@ -297,6 +357,7 @@ const monologue = new Monologue({
   onWord: (word, meta) => {
     historyLayer.addWord(word, { ...meta, source: 'corpus' });
     textLayer.setPhrase(word, { dim: true });
+    midiOutput.sendWordNote(word, 'corpus', corpusVelocity);
   },
   onFinal: () => {
     historyLayer.endUtterance();
@@ -343,6 +404,10 @@ startBtn.addEventListener('click', () => {
   // Camera is optional — if it's denied or absent, the video fill just
   // never kicks in and everything else runs exactly as before.
   videoInput.start().catch((e) => logError('Camera unavailable: ' + e.message));
+  // Same for MIDI/mic-volume: if the IAC bus isn't there or the mic is
+  // denied, word notes just stop firing rather than breaking anything else.
+  midiOutput.connect('IAC').catch((e) => logError('MIDI unavailable: ' + e.message));
+  micVolume.start().catch((e) => logError('Mic volume unavailable: ' + e.message));
 });
 
 // Manual text injection for tech rehearsal / tuning without a live mic:
@@ -350,8 +415,13 @@ startBtn.addEventListener('click', () => {
 // it as a live/in-progress transcript, then __illuminate.finish("some words")
 // to finalize it (sends it to the history log, dismisses the big phrase).
 // __illuminate.monologue is the running Monologue instance (.pause()/.resume()).
+// __illuminate.midiOutput/.micVolume are the MIDI/mic-level instances —
+// e.g. midiOutput.sendWordNote('hello', 'user', 100) to test a note by
+// hand once an IAC bus is connected, without needing to actually speak.
 window.__illuminate = {
   setPhrase: (text) => onPhrase(text, false),
   finish: (text) => onPhrase(text, true),
   monologue,
+  midiOutput,
+  micVolume,
 };

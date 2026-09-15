@@ -12,8 +12,6 @@
 
 const FADE_MS = 450;
 const RISE_PX = 6;
-const USER_ALPHA = 0.3;
-const CORPUS_ALPHA = 0.15; // dimmer — monologue/corpus text reads as background, not spoken
 const SCROLL_TAU_MS = 220; // time constant for easing scroll position toward its target
 
 function easeOutCubic(t) {
@@ -40,8 +38,13 @@ function wrapWords(ctx, words, maxWidth, spaceWidth) {
 }
 
 export class HistoryLayer {
-  constructor({ fontFamily = 'system-ui, sans-serif' } = {}) {
+  constructor({ fontFamily = 'system-ui, sans-serif', userAlpha = 0.65, corpusAlpha = 0.4 } = {}) {
     this.fontFamily = fontFamily;
+    // Peak brightness each source settles at once its fade-in completes.
+    // Tunable live because the right value depends entirely on the
+    // projector and the room, not on anything knowable from here.
+    this.userAlpha = userAlpha;
+    this.corpusAlpha = corpusAlpha;
     // Two canvases so the renderer can shade corpus text (with video)
     // without touching real speech. Layout is computed once and shared,
     // so the two layers stay in exact register — each word is simply
@@ -69,6 +72,11 @@ export class HistoryLayer {
     this.fontFamily = fontFamily;
   }
 
+  setBrightness({ userAlpha, corpusAlpha } = {}) {
+    if (userAlpha !== undefined) this.userAlpha = userAlpha;
+    if (corpusAlpha !== undefined) this.corpusAlpha = corpusAlpha;
+  }
+
   // Streams a single word in as it's produced — by real speech (source:
   // 'user', default) or the corpus monologue (source: 'corpus', dimmer).
   // Pass firstOfUtterance to capitalize the leading word.
@@ -91,13 +99,13 @@ export class HistoryLayer {
   }
 
   _wordStyle(t, now, source) {
-    const target = source === 'corpus' ? CORPUS_ALPHA : USER_ALPHA;
+    const target = source === 'corpus' ? this.corpusAlpha : this.userAlpha;
     const progress = Math.min(1, Math.max(0, (now - t) / FADE_MS));
     const eased = easeOutCubic(progress);
     return { alpha: target * eased, riseY: (1 - eased) * RISE_PX };
   }
 
-  _drawLine(lineWords, x, y, maxWidth, justify, now) {
+  _drawLine(lineWords, x, y, maxWidth, justify, now, fontSize) {
     const widths = lineWords.map((w) => w.width);
     const wordsWidth = widths.reduce((a, b) => a + b, 0);
     const gap = justify && lineWords.length > 1
@@ -107,13 +115,42 @@ export class HistoryLayer {
     let cx = x;
     for (let i = 0; i < lineWords.length; i++) {
       const word = lineWords[i];
-      // Position is identical either way — only the target layer differs.
-      const ctx = word.source === 'corpus' ? this.corpusCtx : this.userCtx;
       const { alpha, riseY } = this._wordStyle(word.t, now, word.source);
-      ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-      ctx.fillText(word.text, cx, y + riseY);
+      // Position is identical either way — only the target layer and look differ.
+      if (word.source === 'corpus') {
+        this.corpusCtx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+        this.corpusCtx.fillText(word.text, cx, y + riseY);
+      } else {
+        const next = lineWords[i + 1];
+        const joinNext = next !== undefined && next.source !== 'corpus';
+        this._drawHighlightedWord(word.text, cx, y + riseY, widths[i], gap, joinNext, alpha, fontSize);
+      }
       cx += widths[i] + gap;
     }
+  }
+
+  // Spoken words render as a highlight box (brightness slider + fade-in
+  // both drive the box's alpha) with solid black text painted on top, so
+  // the letters stay fully legible even while the box itself is still
+  // fading in.
+  _drawHighlightedWord(text, cx, y, width, gap, joinNext, alpha, fontSize) {
+    const ctx = this.userCtx;
+    // Horizontal padding never exceeds half the gap, so a box can't spill
+    // onto a neighbouring corpus word.
+    const padX = Math.min(fontSize * 0.25, gap / 2);
+    const left = cx - padX;
+    // Run straight into the next spoken word's box, so a phrase reads as one
+    // continuous highlight rather than a row of separate chips.
+    const right = joinNext ? cx + width + gap - padX : cx + width + padX;
+    // Fits within lineHeight (1.35 × fontSize), so lines never overlap.
+    const top = y - fontSize * 0.1;
+    const height = fontSize * 1.3;
+
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.fillRect(left, top, right - left, height);
+
+    ctx.fillStyle = '#000';
+    ctx.fillText(text, cx, y);
   }
 
   _draw(dtMs) {
@@ -165,7 +202,7 @@ export class HistoryLayer {
     for (let i = 0; i < lines.length; i++) {
       if (y + lineHeight >= marginTop && y <= maxY) {
         const isLastLine = i === lines.length - 1;
-        this._drawLine(lines[i], marginLeft, y, maxWidth, !isLastLine, now);
+        this._drawLine(lines[i], marginLeft, y, maxWidth, !isLastLine, now, fontSize);
       }
       y += lineHeight;
     }
