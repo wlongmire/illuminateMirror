@@ -2,13 +2,27 @@
 // Nothing is ever recorded or sent anywhere — frames only exist as a
 // WebGL texture for the current draw.
 //
-// Two sources: the live camera, and a synthetic animated test pattern.
-// The test pattern needs no permissions or hardware, so it's the way to
-// rehearse the look without a camera — and the way to tell a camera
-// problem apart from a rendering one.
+// Sources: the live camera, a synthetic animated test pattern, or one of
+// a handful of pre-loaded mirror clips (served from public/videos/ so
+// Vite copies them as-is rather than trying to bundle them). The test
+// pattern needs no permissions or hardware, so it's the way to rehearse
+// the look without a camera — and the way to tell a camera problem apart
+// from a rendering one. The mirror clips reuse the same <video> element
+// as the camera (just pointed at a file instead of a live stream), so
+// `ready`/`aspect`/`frameSource` need no per-source branching for them.
 
 const TEST_W = 640;
 const TEST_H = 360;
+
+// Looping stock clips available as video-fill sources, in addition to the
+// live camera and the test pattern. Labels are generic since the clips'
+// content isn't meaningful to the code — just distinct selectable options.
+export const MIRROR_VIDEOS = [
+  { id: 'mirror1', label: 'Mirror clip 1', path: '/videos/8724310-uhd_2160_4096_25fps.mp4' },
+  { id: 'mirror2', label: 'Mirror clip 2', path: '/videos/12908966-uhd_2160_3840_24fps.mp4' },
+  { id: 'mirror3', label: 'Mirror clip 3', path: '/videos/15559259_2160_3840_50fps.mp4' },
+  { id: 'mirror4', label: 'Mirror clip 4', path: '/videos/14652363_1080_1920_30fps.mp4' },
+];
 
 export class VideoInput {
   constructor({ source = 'camera' } = {}) {
@@ -106,9 +120,27 @@ export class VideoInput {
     this.state = 'starting';
     this.error = null;
     try {
+      const mirror = MIRROR_VIDEOS.find((v) => v.id === this.source);
+      if (mirror) {
+        // A file source needs no permission, but it does need the camera
+        // stream (if any) released and `src`/`srcObject` are mutually
+        // exclusive on a <video> element.
+        if (this.stream) {
+          this.stream.getTracks().forEach((t) => t.stop());
+          this.stream = null;
+        }
+        this.video.srcObject = null;
+        this.video.loop = true;
+        this.video.src = mirror.path;
+        await this.video.play();
+        this.state = 'live';
+        return;
+      }
+
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error('getUserMedia unavailable (page must be on localhost or https)');
       }
+      this.video.removeAttribute('src');
       this.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       this.video.srcObject = this.stream;
       await this.video.play();
@@ -125,6 +157,8 @@ export class VideoInput {
       this.stream.getTracks().forEach((t) => t.stop());
       this.stream = null;
     }
+    this.video.pause();
+    this.video.removeAttribute('src');
     this.video.srcObject = null;
     this.state = 'off';
   }

@@ -42,7 +42,10 @@ function computeLayout(ctx, text, canvasW, canvasH, fontFamily, fontWeight, size
 }
 
 export class TextLayer {
-  constructor({ fontFamily = 'system-ui, sans-serif', fontWeight = 700, sizeScale = 1, letterSpacing = 0, holdMs = 1200, transitionMs = 300, userSizeScale = 1 } = {}) {
+  constructor({
+    fontFamily = 'system-ui, sans-serif', fontWeight = 700, sizeScale = 1, letterSpacing = 0,
+    holdMs = 1200, transitionMs = 300, userSizeScale = 1, userVolumeBoost = 0.6,
+  } = {}) {
     this.fontFamily = fontFamily;
     this.fontWeight = fontWeight;
     this.sizeScale = sizeScale;
@@ -86,6 +89,12 @@ export class TextLayer {
     // (corpus size is governed by dimSizeScale instead) — lets the user
     // text's peak size be tuned independently of the shared base size.
     this.userSizeScale = userSizeScale;
+    // How much louder speech additionally grows real-speech text, on top
+    // of userSizeScale — 0 at silence, this value at the loudest the mic
+    // range is calibrated for. Corpus text has no live level to read, so
+    // it's unaffected regardless of this.volume's value.
+    this.userVolumeBoost = userVolumeBoost;
+    this.volume = 0; // 0..1, set by setPhrase for the utterance now on screen
   }
 
   resize(w, h) {
@@ -114,24 +123,40 @@ export class TextLayer {
     this.userSizeScale = scale;
   }
 
+  setUserVolumeBoost(boost) {
+    this.userVolumeBoost = boost;
+  }
+
   // Live/interim transcript for the utterance currently being spoken.
   // The finalized wording is never shown here — call finishUtterance()
   // when the utterance completes instead of another setPhrase(). Pass
   // dim: true for corpus/monologue text — ignored on continuation calls
   // for the same utterance, since that's decided when the utterance starts.
-  setPhrase(text, { dim = false } = {}) {
+  // `volume` (0..1, real speech only) is the utterance's current loudness —
+  // read live on every call (unlike history's per-word volume, which is
+  // baked in once), so the block keeps growing/shrinking with it word to word.
+  setPhrase(text, { dim = false, volume = 0 } = {}) {
     text = text.trim();
     if (!text) return;
 
     // New words landing resets the on-screen clock — the auto-fade only
     // starts counting once speech actually pauses.
     this.holdTimer = 0;
+    this.volume = volume;
 
     if (this.utteranceActive) {
       // Same utterance as last call, just a longer interim transcript —
-      // update in place rather than re-running the crossfade.
+      // update in place rather than re-running the crossfade. Exception:
+      // if speech paused long enough for the phrase to already auto-fade
+      // out (phase 'empty') before this word arrived, there's nothing on
+      // screen to update in place — bring it back with a fresh entrance
+      // instead of silently writing into invisible text that would never
+      // reappear for the rest of this utterance.
       if (this.phase === 'out') {
         this.pendingText = text;
+      } else if (this.phase === 'empty') {
+        this.pendingText = text;
+        this._applyPending();
       } else {
         this.currentText = text;
         this.pendingText = null;
@@ -229,7 +254,7 @@ export class TextLayer {
     if (!this.layout) {
       const effectiveSizeScale = this.dim
         ? this.sizeScale * this.dimSizeScale
-        : this.sizeScale * this.userSizeScale;
+        : this.sizeScale * this.userSizeScale * (1 + this.volume * this.userVolumeBoost);
       this.layout = computeLayout(
         ctx, this.currentText, canvas.width, canvas.height,
         this.fontFamily, this.fontWeight, effectiveSizeScale

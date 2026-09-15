@@ -53,6 +53,7 @@
     font-size: 12px; color: #ccc;
     background: rgba(0,0,0,0.75); border: 1px solid #333; border-radius: 6px;
     padding: 14px 16px; z-index: 6; width: 220px;
+    max-height: calc(100vh - 40px); overflow-y: auto; overscroll-behavior: contain;
   }
   #stylePanel h2 {
     margin: 0 0 2px; font-size: 11px; font-weight: 600; color: #888;
@@ -118,6 +119,10 @@
       <input type="range" id="styleUserSize" min="80" max="250" step="5" value="100">
     </label>
     <label>
+      <span class="row"><span>User size volume boost</span><span id="styleUserVolumeBoostVal">60%</span></span>
+      <input type="range" id="styleUserVolumeBoost" min="0" max="200" step="5" value="60">
+    </label>
+    <label>
       <span class="row"><span>Letter spacing</span><span id="styleSpacingVal">0px</span></span>
       <input type="range" id="styleSpacing" min="-5" max="40" step="1" value="0">
     </label>
@@ -126,12 +131,24 @@
 
     <h3>Brightness (history log)</h3>
     <label>
-      <span class="row"><span>Corpus text</span><span id="styleCorpusAlphaVal">40%</span></span>
-      <input type="range" id="styleCorpusAlpha" min="0" max="100" step="5" value="40">
+      <span class="row"><span>Corpus text</span><span id="styleCorpusAlphaVal">100%</span></span>
+      <input type="range" id="styleCorpusAlpha" min="0" max="100" step="5" value="100">
     </label>
     <label>
       <span class="row"><span>Spoken text</span><span id="styleUserAlphaVal">65%</span></span>
       <input type="range" id="styleUserAlpha" min="0" max="100" step="5" value="65">
+    </label>
+
+    <hr>
+
+    <h3>Word size (history log)</h3>
+    <label>
+      <span class="row"><span>Spoken word size</span><span id="styleUserWordSizeVal">80%</span></span>
+      <input type="range" id="styleUserWordSize" min="30" max="250" step="5" value="80">
+    </label>
+    <label>
+      <span class="row"><span>Volume size boost</span><span id="styleVolumeBoostVal">200%</span></span>
+      <input type="range" id="styleVolumeBoost" min="0" max="300" step="5" value="200">
     </label>
 
     <hr>

@@ -61,13 +61,18 @@ export class MicVolumeMeter {
     return this.level > 0 ? 20 * Math.log10(this.level) : -100;
   }
 
-  // Maps the current level onto a 1-127 MIDI velocity, calibrated by a
-  // floor/ceiling in dB — these depend entirely on the room/mic/gain, so
-  // they're exposed as live-tunable rather than guessed at here.
-  getVelocity(floorDb, ceilDb) {
+  // 0..1 loudness, calibrated by a floor/ceiling in dB — these depend
+  // entirely on the room/mic/gain, so they're exposed as live-tunable
+  // rather than guessed at here. Shared by MIDI velocity and the history
+  // log's volume-driven word size (see historyLayer.js).
+  getNormalized(floorDb, ceilDb) {
     const t = (this.db - floorDb) / (ceilDb - floorDb);
-    const clamped = Math.max(0, Math.min(1, t));
-    return Math.round(clamped * 126) + 1;
+    return Math.max(0, Math.min(1, t));
+  }
+
+  // Maps the current level onto a 1-127 MIDI velocity.
+  getVelocity(floorDb, ceilDb) {
+    return Math.round(this.getNormalized(floorDb, ceilDb) * 126) + 1;
   }
 
   stop() {

@@ -18,6 +18,7 @@ const MAX_OCTAVES = 4; // 26 letters spread over ~3.7 octaves of a 7-note scale
 const DETAIL_DECAY = 0.5; // each subsequent letter counts for half the last
 const MAX_DETAIL_SEMITONES = 3; // total wobble from letters 2+ is capped to this
 const NOTE_GATE_MS = 150; // fixed note-off delay — independent of speaking pace
+const SUSTAIN_CC = 64; // damper/sustain pedal
 
 // 0-indexed channels (MIDI channel numbers as shown in a DAW are +1: so
 // 'user' is channel 4, 'corpus' is channel 5).
@@ -34,8 +35,10 @@ export function noteForWord(word) {
   if (!letters) return null;
 
   const first = letterIndex(letters[0]);
-  const degree = first % SCALE.length;
-  const octave = Math.min(MAX_OCTAVES - 1, Math.floor(first / SCALE.length));
+  // Flipped so 'a' sits at the top of the range and 'z' at the bottom.
+  const flipped = 25 - first;
+  const degree = flipped % SCALE.length;
+  const octave = Math.min(MAX_OCTAVES - 1, Math.floor(flipped / SCALE.length));
   const base = ROOT_NOTE + octave * 12 + SCALE[degree];
 
   let detailSum = 0;
@@ -82,6 +85,7 @@ export class MidiOutput {
         throw new Error(`No MIDI output matching "${portNameSubstring}" found`);
       }
       this.state = 'live';
+      this._sendSustainOn();
     } catch (e) {
       this.state = 'error';
       this.error = e.message;
@@ -91,6 +95,17 @@ export class MidiOutput {
 
   get portName() {
     return this.output ? this.output.name : null;
+  }
+
+  // Held down for the whole run, on every channel — notes ring out through
+  // the receiving synth's own release/decay instead of cutting cleanly at
+  // NOTE_GATE_MS. A note-off is still sent on schedule; sustain is what
+  // makes the synth treat that as "key released" rather than "silence now".
+  _sendSustainOn() {
+    if (!this.output) return;
+    for (const channel of Object.values(CHANNEL)) {
+      this.output.send([0xb0 | channel, SUSTAIN_CC, 127]);
+    }
   }
 
   // channelKey: 'user' | 'corpus'. velocity: 1-127.

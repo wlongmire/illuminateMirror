@@ -3,7 +3,7 @@ import { TextLayer } from './textLayer.js';
 import { HistoryLayer } from './historyLayer.js';
 import { Renderer } from './renderer.js';
 import { Monologue } from './monologue.js';
-import { VideoInput } from './videoInput.js';
+import { VideoInput, MIRROR_VIDEOS } from './videoInput.js';
 import { MidiOutput } from './midiOutput.js';
 import { MicVolumeMeter } from './micVolume.js';
 
@@ -21,6 +21,8 @@ const styleSizeEl = document.getElementById('styleSize');
 const styleSizeVal = document.getElementById('styleSizeVal');
 const styleUserSizeEl = document.getElementById('styleUserSize');
 const styleUserSizeVal = document.getElementById('styleUserSizeVal');
+const styleUserVolumeBoostEl = document.getElementById('styleUserVolumeBoost');
+const styleUserVolumeBoostVal = document.getElementById('styleUserVolumeBoostVal');
 const styleSpacingEl = document.getElementById('styleSpacing');
 const styleSpacingVal = document.getElementById('styleSpacingVal');
 const styleTransitionEl = document.getElementById('styleTransition');
@@ -31,6 +33,10 @@ const styleCorpusAlphaEl = document.getElementById('styleCorpusAlpha');
 const styleCorpusAlphaVal = document.getElementById('styleCorpusAlphaVal');
 const styleUserAlphaEl = document.getElementById('styleUserAlpha');
 const styleUserAlphaVal = document.getElementById('styleUserAlphaVal');
+const styleUserWordSizeEl = document.getElementById('styleUserWordSize');
+const styleUserWordSizeVal = document.getElementById('styleUserWordSizeVal');
+const styleVolumeBoostEl = document.getElementById('styleVolumeBoost');
+const styleVolumeBoostVal = document.getElementById('styleVolumeBoostVal');
 const styleCorpusModeEl = document.getElementById('styleCorpusMode');
 const styleCorpusBaseEl = document.getElementById('styleCorpusBase');
 const styleCorpusBaseVal = document.getElementById('styleCorpusBaseVal');
@@ -51,6 +57,15 @@ const styleMicFloorVal = document.getElementById('styleMicFloorVal');
 const styleMicCeilEl = document.getElementById('styleMicCeil');
 const styleMicCeilVal = document.getElementById('styleMicCeilVal');
 
+// Mirror clip options aren't hardcoded in index.html — added here from the
+// single manifest in videoInput.js so there's one place that knows about them.
+for (const v of MIRROR_VIDEOS) {
+  const opt = document.createElement('option');
+  opt.value = v.id;
+  opt.textContent = v.label;
+  styleVideoSourceEl.appendChild(opt);
+}
+
 // Errors don't render on screen (this runs unattended, projected) — just
 // logged for whoever's at a laptop during tech rehearsal.
 function logError(msg) {
@@ -64,11 +79,12 @@ function setLive(isLive) {
 // ---- Text style (persisted rehearsal tuning) -----------------------------
 const STYLE_STORAGE_KEY = 'illuminate:textStyle';
 const DEFAULT_STYLE = {
-  fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, userSizeScale: 1, letterSpacing: 0,
+  fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, userSizeScale: 1, userVolumeBoost: 0.6, letterSpacing: 0,
   transitionMs: 300, holdMs: 1200,
   corpusMode: 'sine', corpusBaseMs: 300, corpusAmplitudeMs: 150, corpusFrequencyHz: 0.2,
   videoSource: 'camera', videoInfluence: 0, videoGain: 1,
-  corpusAlpha: 0.4, userAlpha: 0.65,
+  corpusAlpha: 1, userAlpha: 0.65,
+  userWordSizeScale: 0.8, volumeSizeBoost: 2,
   // MIDI: user-note velocity comes from live mic level (calibrated by the
   // floor/ceiling dB range below); corpus notes use a fixed velocity.
   corpusVelocity: 90, micFloorDb: -50, micCeilDb: -12,
@@ -94,6 +110,8 @@ const historyLayer = new HistoryLayer({
   fontFamily: textLayer.fontFamily,
   corpusAlpha: initialStyle.corpusAlpha,
   userAlpha: initialStyle.userAlpha,
+  userWordSizeScale: initialStyle.userWordSizeScale,
+  volumeSizeBoost: initialStyle.volumeSizeBoost,
 });
 // Live camera (or test pattern), used to fill both history layers — see
 // renderer's video pass.
@@ -134,6 +152,8 @@ function applyStyleToPanel(style) {
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
   styleUserSizeEl.value = Math.round(style.userSizeScale * 100);
   styleUserSizeVal.textContent = `${Math.round(style.userSizeScale * 100)}%`;
+  styleUserVolumeBoostEl.value = Math.round(style.userVolumeBoost * 100);
+  styleUserVolumeBoostVal.textContent = `${Math.round(style.userVolumeBoost * 100)}%`;
   styleSpacingEl.value = style.letterSpacing;
   styleSpacingVal.textContent = `${style.letterSpacing}px`;
   styleTransitionEl.value = style.transitionMs;
@@ -144,6 +164,10 @@ function applyStyleToPanel(style) {
   styleCorpusAlphaVal.textContent = `${Math.round(style.corpusAlpha * 100)}%`;
   styleUserAlphaEl.value = Math.round(style.userAlpha * 100);
   styleUserAlphaVal.textContent = `${Math.round(style.userAlpha * 100)}%`;
+  styleUserWordSizeEl.value = Math.round(style.userWordSizeScale * 100);
+  styleUserWordSizeVal.textContent = `${Math.round(style.userWordSizeScale * 100)}%`;
+  styleVolumeBoostEl.value = Math.round(style.volumeSizeBoost * 100);
+  styleVolumeBoostVal.textContent = `${Math.round(style.volumeSizeBoost * 100)}%`;
   styleCorpusModeEl.value = style.corpusMode;
   styleCorpusBaseEl.value = style.corpusBaseMs;
   styleCorpusBaseVal.textContent = `${style.corpusBaseMs}ms/word`;
@@ -172,11 +196,14 @@ function onStyleInput() {
     fontWeight: Number(styleWeightEl.value),
     sizeScale: Number(styleSizeEl.value) / 100,
     userSizeScale: Number(styleUserSizeEl.value) / 100,
+    userVolumeBoost: Number(styleUserVolumeBoostEl.value) / 100,
     letterSpacing: Number(styleSpacingEl.value),
     transitionMs: Number(styleTransitionEl.value),
     holdMs: Number(styleHoldEl.value),
     corpusAlpha: Number(styleCorpusAlphaEl.value) / 100,
     userAlpha: Number(styleUserAlphaEl.value) / 100,
+    userWordSizeScale: Number(styleUserWordSizeEl.value) / 100,
+    volumeSizeBoost: Number(styleVolumeBoostEl.value) / 100,
     corpusMode: styleCorpusModeEl.value,
     corpusBaseMs: Number(styleCorpusBaseEl.value),
     corpusAmplitudeMs: Number(styleCorpusAmplitudeEl.value),
@@ -191,6 +218,7 @@ function onStyleInput() {
   styleWeightVal.textContent = style.fontWeight;
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
   styleUserSizeVal.textContent = `${Math.round(style.userSizeScale * 100)}%`;
+  styleUserVolumeBoostVal.textContent = `${Math.round(style.userVolumeBoost * 100)}%`;
   styleSpacingVal.textContent = `${style.letterSpacing}px`;
   styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
   styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
@@ -210,19 +238,29 @@ function onStyleInput() {
   micCeilDb = style.micCeilDb;
   if (style.videoSource !== videoInput.source) {
     videoInput.setSource(style.videoSource);
-    // Switching to the camera mid-run may need it started for the first time.
-    if (style.videoSource === 'camera' && videoInput.state !== 'live') {
-      videoInput.start().catch((e) => logError('Camera unavailable: ' + e.message));
+    if (style.videoSource === 'camera') {
+      // Switching to the camera mid-run may need it started for the first time.
+      if (videoInput.state !== 'live') {
+        videoInput.start().catch((e) => logError('Camera unavailable: ' + e.message));
+      }
+    } else if (style.videoSource !== 'test') {
+      // A mirror clip: always (re)start, since each one points the shared
+      // <video> element at a different file even if one was already live.
+      videoInput.start().catch((e) => logError('Video unavailable: ' + e.message));
     }
   }
   textLayer.setStyle(style);
   textLayer.setUserSizeScale(style.userSizeScale);
+  textLayer.setUserVolumeBoost(style.userVolumeBoost);
   textLayer.setTransitionMs(style.transitionMs);
   textLayer.setHoldMs(style.holdMs);
   styleCorpusAlphaVal.textContent = `${Math.round(style.corpusAlpha * 100)}%`;
   styleUserAlphaVal.textContent = `${Math.round(style.userAlpha * 100)}%`;
+  styleUserWordSizeVal.textContent = `${Math.round(style.userWordSizeScale * 100)}%`;
+  styleVolumeBoostVal.textContent = `${Math.round(style.volumeSizeBoost * 100)}%`;
   historyLayer.setFontFamily(style.fontFamily);
   historyLayer.setBrightness({ corpusAlpha: style.corpusAlpha, userAlpha: style.userAlpha });
+  historyLayer.setUserWordSizing({ sizeScale: style.userWordSizeScale, volumeBoost: style.volumeSizeBoost });
   monologue.setMode(style.corpusMode);
   monologue.setBaseDelayMs(style.corpusBaseMs);
   monologue.setAmplitudeMs(style.corpusAmplitudeMs);
@@ -230,11 +268,11 @@ function onStyleInput() {
   saveStyle(style);
 }
 [
-  styleFontEl, styleWeightEl, styleSizeEl, styleUserSizeEl, styleSpacingEl,
+  styleFontEl, styleWeightEl, styleSizeEl, styleUserSizeEl, styleUserVolumeBoostEl, styleSpacingEl,
   styleTransitionEl, styleHoldEl, styleCorpusModeEl, styleCorpusBaseEl,
   styleCorpusAmplitudeEl, styleCorpusFrequencyEl,
   styleVideoSourceEl, styleVideoInfluenceEl, styleVideoGainEl,
-  styleCorpusAlphaEl, styleUserAlphaEl,
+  styleCorpusAlphaEl, styleUserAlphaEl, styleUserWordSizeEl, styleVolumeBoostEl,
   styleCorpusVelocityEl, styleMicFloorEl, styleMicCeilEl,
 ].forEach((el) => {
   el.addEventListener('input', onStyleInput);
@@ -327,13 +365,14 @@ function onPhrase(text, isFinal) {
     textLayer.finishUtterance();
     spokenWordCount = 0;
   } else {
+    const volume = micVolume.getNormalized(micFloorDb, micCeilDb);
     const words = text.trim().split(/\s+/).filter(Boolean);
     words.slice(spokenWordCount).forEach((word, i) => {
-      historyLayer.addWord(word, { firstOfUtterance: spokenWordCount === 0 && i === 0 });
-      midiOutput.sendWordNote(word, 'user', micVolume.getVelocity(micFloorDb, micCeilDb));
+      historyLayer.addWord(word, { firstOfUtterance: spokenWordCount === 0 && i === 0, volume });
+      midiOutput.sendWordNote(word, 'user', Math.round(volume * 126) + 1);
     });
     spokenWordCount = words.length;
-    textLayer.setPhrase(text, { dim: false });
+    textLayer.setPhrase(text, { dim: false, volume });
   }
 }
 

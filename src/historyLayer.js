@@ -38,13 +38,22 @@ function wrapWords(ctx, words, maxWidth, spaceWidth) {
 }
 
 export class HistoryLayer {
-  constructor({ fontFamily = 'system-ui, sans-serif', userAlpha = 0.65, corpusAlpha = 0.4 } = {}) {
+  constructor({
+    fontFamily = 'system-ui, sans-serif', userAlpha = 0.65, corpusAlpha = 0.4,
+    userWordSizeScale = 0.8, volumeSizeBoost = 2,
+  } = {}) {
     this.fontFamily = fontFamily;
     // Peak brightness each source settles at once its fade-in completes.
     // Tunable live because the right value depends entirely on the
     // projector and the room, not on anything knowable from here.
     this.userAlpha = userAlpha;
     this.corpusAlpha = corpusAlpha;
+    // Spoken words render larger than the shared base size, and louder
+    // ones larger still (see addWord's `volume`) — the corpus monologue
+    // is scripted with no live level to read, so it always renders at
+    // the plain base size.
+    this.userWordSizeScale = userWordSizeScale;
+    this.volumeSizeBoost = volumeSizeBoost;
     // Two canvases so the renderer can shade corpus text (with video)
     // without touching real speech. Layout is computed once and shared,
     // so the two layers stay in exact register — each word is simply
@@ -77,14 +86,29 @@ export class HistoryLayer {
     if (corpusAlpha !== undefined) this.corpusAlpha = corpusAlpha;
   }
 
+  setUserWordSizing({ sizeScale, volumeBoost } = {}) {
+    if (sizeScale !== undefined) this.userWordSizeScale = sizeScale;
+    if (volumeBoost !== undefined) this.volumeSizeBoost = volumeBoost;
+  }
+
   // Streams a single word in as it's produced — by real speech (source:
   // 'user', default) or the corpus monologue (source: 'corpus', dimmer).
-  // Pass firstOfUtterance to capitalize the leading word.
-  addWord(word, { firstOfUtterance = false, source = 'user' } = {}) {
+  // Pass firstOfUtterance to capitalize the leading word. `volume` (0..1,
+  // user words only) is this word's live loudness at the moment it was
+  // spoken — baked in now rather than read live later, since a word's
+  // size shouldn't keep changing after it's already landed in the log.
+  addWord(word, { firstOfUtterance = false, source = 'user', volume = 0 } = {}) {
     word = word.trim();
     if (!word) return;
     if (firstOfUtterance) word = word.charAt(0).toUpperCase() + word.slice(1);
-    this.words.push({ text: word, t: performance.now(), source });
+    this.words.push({ text: word, t: performance.now(), source, volume: Math.max(0, Math.min(1, volume)) });
+  }
+
+  // Corpus words always render at the shared base size; user words run
+  // bigger by default and bigger still the louder they were spoken.
+  _effectiveFontSize(word, baseFontSize) {
+    if (word.source !== 'user') return baseFontSize;
+    return baseFontSize * this.userWordSizeScale * (1 + word.volume * this.volumeSizeBoost);
   }
 
   // Closes out a run of addWord() calls with trailing punctuation.
@@ -105,25 +129,29 @@ export class HistoryLayer {
     return { alpha: target * eased, riseY: (1 - eased) * RISE_PX };
   }
 
-  _drawLine(lineWords, x, y, maxWidth, justify, now, fontSize) {
+  _drawLine(lineWords, x, y, maxWidth, justify, now, spaceWidth) {
     const widths = lineWords.map((w) => w.width);
     const wordsWidth = widths.reduce((a, b) => a + b, 0);
     const gap = justify && lineWords.length > 1
       ? (maxWidth - wordsWidth) / (lineWords.length - 1)
-      : this.userCtx.measureText(' ').width;
+      : spaceWidth;
 
     let cx = x;
     for (let i = 0; i < lineWords.length; i++) {
       const word = lineWords[i];
       const { alpha, riseY } = this._wordStyle(word.t, now, word.source);
       // Position is identical either way — only the target layer and look differ.
+      // Each word carries its own font size, so the font must be switched
+      // back to it right before drawing (measurement already used it too).
       if (word.source === 'corpus') {
+        this.corpusCtx.font = `400 ${word.fontSize}px ${this.fontFamily}`;
         this.corpusCtx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
         this.corpusCtx.fillText(word.text, cx, y + riseY);
       } else {
         const next = lineWords[i + 1];
         const joinNext = next !== undefined && next.source !== 'corpus';
-        this._drawHighlightedWord(word.text, cx, y + riseY, widths[i], gap, joinNext, alpha, fontSize);
+        this.userCtx.font = `400 ${word.fontSize}px ${this.fontFamily}`;
+        this._drawHighlightedWord(word.text, cx, y + riseY, widths[i], gap, joinNext, alpha, word.fontSize);
       }
       cx += widths[i] + gap;
     }
@@ -160,8 +188,7 @@ export class HistoryLayer {
     }
     if (!this.words.length) return;
 
-    const fontSize = Math.max(14, Math.min(canvas.width, canvas.height) * 0.022);
-    const lineHeight = fontSize * 1.35;
+    const baseFontSize = Math.max(14, Math.min(canvas.width, canvas.height) * 0.022);
     const marginTop = canvas.height * 0.05;
     const marginLeft = canvas.width * 0.04;
     const maxWidth = canvas.width - marginLeft * 2;
@@ -169,22 +196,31 @@ export class HistoryLayer {
     const viewportHeight = maxY - marginTop;
 
     for (const layerCtx of this.layerCtxs) {
-      layerCtx.font = `400 ${fontSize}px ${this.fontFamily}`;
       layerCtx.textAlign = 'left';
       layerCtx.textBaseline = 'top';
     }
 
     // Measured once on one layer — the font is identical on both, so the
-    // layout below applies to each without drifting out of register.
+    // layout below applies to each without drifting out of register. Each
+    // word gets its own font size (see _effectiveFontSize) before being
+    // measured, since a louder/user word's width depends on it.
     const ctx = this.userCtx;
-    const words = this.words.map((w) => ({ ...w, width: ctx.measureText(w.text).width }));
+    const words = this.words.map((w) => {
+      const fontSize = this._effectiveFontSize(w, baseFontSize);
+      ctx.font = `400 ${fontSize}px ${this.fontFamily}`;
+      return { ...w, fontSize, width: ctx.measureText(w.text).width };
+    });
+    ctx.font = `400 ${baseFontSize}px ${this.fontFamily}`;
     const spaceWidth = ctx.measureText(' ').width;
     const lines = wrapWords(ctx, words, maxWidth, spaceWidth);
+    // Each line's height follows its tallest word, so bigger words never
+    // overlap the line below them.
+    const lineHeights = lines.map((line) => Math.max(...line.map((w) => w.fontSize)) * 1.35);
 
     // Once the flow is taller than the viewport, the target scroll keeps
     // the newest line pinned to the bottom; ease toward it each frame so
     // new lines arriving slide the block up rather than snapping.
-    const totalHeight = lines.length * lineHeight;
+    const totalHeight = lineHeights.reduce((a, b) => a + b, 0);
     const targetScroll = Math.max(0, totalHeight - viewportHeight);
     const t = 1 - Math.exp(-dtMs / SCROLL_TAU_MS);
     this.scrollY += (targetScroll - this.scrollY) * t;
@@ -200,9 +236,10 @@ export class HistoryLayer {
 
     let y = marginTop - this.scrollY;
     for (let i = 0; i < lines.length; i++) {
+      const lineHeight = lineHeights[i];
       if (y + lineHeight >= marginTop && y <= maxY) {
         const isLastLine = i === lines.length - 1;
-        this._drawLine(lines[i], marginLeft, y, maxWidth, !isLastLine, now, fontSize);
+        this._drawLine(lines[i], marginLeft, y, maxWidth, !isLastLine, now, spaceWidth);
       }
       y += lineHeight;
     }
