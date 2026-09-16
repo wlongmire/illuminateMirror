@@ -61,7 +61,7 @@ const styleMicCeilVal = document.getElementById('styleMicCeilVal');
 
 // Mirror clip options aren't hardcoded in index.html — added here from the
 // single manifest in videoInput.js so there's one place that knows about them.
-// Also doubles as the cycling order for the left/right-arrow shortcut below.
+// Also doubles as the 1-5 number-key shortcut order below (index 0 -> '1').
 const VIDEO_SOURCE_ORDER = ['camera', ...MIRROR_VIDEOS.map((v) => v.id)];
 for (const v of MIRROR_VIDEOS) {
   const opt = document.createElement('option');
@@ -328,6 +328,41 @@ const FRAME_ASPECT = 1366 / 768;
 const FRAME_WINDOW = { left: 0.332, top: 0.190, width: 0.304, height: 0.655 };
 let frameEnabled = false;
 
+// Fine-tune nudge/scale for the whole framed composition (frame image +
+// canvas together, so they stay in registration — arrow keys and +/-,
+// frame mode only) and, separately, for just the canvas (text/history
+// layers) relative to the frame image (shift+arrows/shift+plus-minus) —
+// for aligning content inside the frame's window independently of the
+// frame's own position/size. Persisted across reloads (unlike frameEnabled
+// itself, or the 'd'/'p' toggles) since dialing these in is real physical
+// setup work for a specific room/projector that shouldn't be lost on a
+// refresh; reset with Backspace/Delete.
+const FRAME_ADJUST_STORAGE_KEY = 'illuminate:frameAdjust';
+const DEFAULT_FRAME_ADJUST = {
+  frameOffsetX: 0, frameOffsetY: 0, frameScale: 1,
+  contentOffsetX: 0, contentOffsetY: 0, contentScale: 1,
+};
+
+function loadFrameAdjust() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FRAME_ADJUST_STORAGE_KEY));
+    return { ...DEFAULT_FRAME_ADJUST, ...saved };
+  } catch (e) {
+    return { ...DEFAULT_FRAME_ADJUST };
+  }
+}
+
+function saveFrameAdjust() {
+  try {
+    localStorage.setItem(FRAME_ADJUST_STORAGE_KEY, JSON.stringify({
+      frameOffsetX, frameOffsetY, frameScale, contentOffsetX, contentOffsetY, contentScale,
+    }));
+  } catch (e) { /* storage unavailable */ }
+}
+
+const initialFrameAdjust = loadFrameAdjust();
+let { frameOffsetX, frameOffsetY, frameScale, contentOffsetX, contentOffsetY, contentScale } = initialFrameAdjust;
+
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
   let boxW = window.innerWidth;
@@ -337,21 +372,31 @@ function resize() {
     // Largest frame-image-shaped box that fits the viewport (same math as
     // CSS object-fit: contain), centered — the piece then only occupies
     // the window cut into that box, same fraction regardless of size.
+    // frameScale then scales that best-fit box up or down from center,
+    // before the offset shifts it — so scaling and nudging compose the
+    // way you'd expect regardless of which was adjusted more recently.
     const viewportAspect = window.innerWidth / window.innerHeight;
-    const stageW = viewportAspect > FRAME_ASPECT ? window.innerHeight * FRAME_ASPECT : window.innerWidth;
-    const stageH = viewportAspect > FRAME_ASPECT ? window.innerHeight : window.innerWidth / FRAME_ASPECT;
-    const stageLeft = (window.innerWidth - stageW) / 2;
-    const stageTop = (window.innerHeight - stageH) / 2;
+    const stageW = (viewportAspect > FRAME_ASPECT ? window.innerHeight * FRAME_ASPECT : window.innerWidth) * frameScale;
+    const stageH = (viewportAspect > FRAME_ASPECT ? window.innerHeight : window.innerWidth / FRAME_ASPECT) * frameScale;
+    const stageLeft = (window.innerWidth - stageW) / 2 + frameOffsetX;
+    const stageTop = (window.innerHeight - stageH) / 2 + frameOffsetY;
 
     frameOverlayEl.style.left = `${stageLeft}px`;
     frameOverlayEl.style.top = `${stageTop}px`;
     frameOverlayEl.style.width = `${stageW}px`;
     frameOverlayEl.style.height = `${stageH}px`;
 
-    boxW = FRAME_WINDOW.width * stageW;
-    boxH = FRAME_WINDOW.height * stageH;
-    glCanvas.style.left = `${stageLeft + FRAME_WINDOW.left * stageW}px`;
-    glCanvas.style.top = `${stageTop + FRAME_WINDOW.top * stageH}px`;
+    // contentScale scales the canvas from the center of the window (same
+    // pattern as frameScale on the stage), so it grows/shrinks in place
+    // before contentOffset shifts it.
+    const windowW = FRAME_WINDOW.width * stageW;
+    const windowH = FRAME_WINDOW.height * stageH;
+    boxW = windowW * contentScale;
+    boxH = windowH * contentScale;
+    const windowLeft = stageLeft + FRAME_WINDOW.left * stageW;
+    const windowTop = stageTop + FRAME_WINDOW.top * stageH;
+    glCanvas.style.left = `${windowLeft - (boxW - windowW) / 2 + contentOffsetX}px`;
+    glCanvas.style.top = `${windowTop - (boxH - windowH) / 2 + contentOffsetY}px`;
     glCanvas.style.right = 'auto';
     glCanvas.style.bottom = 'auto';
   } else {
@@ -407,7 +452,8 @@ function frame(t) {
       `src ${videoInput.source}  cam ${cam}  ready ${videoInput.ready}  ${videoInput.video.videoWidth}x${videoInput.video.videoHeight}\n` +
       `influence ${videoInfluence.toFixed(2)}  gain ${videoGain.toFixed(1)}  shading ${shading}\n` +
       `midi ${midi} (${midiOutput.portName ?? 'no port'})  mic ${mic}  level ${micVolume.db.toFixed(1)}dB  vel ${micVolume.getVelocity(micFloorDb, micCeilDb)}\n` +
-      `frame ${frameEnabled ? 'on' : 'off'} (f to toggle)`;
+      `frame ${frameEnabled ? 'on' : 'off'} (f to toggle)  offset ${frameOffsetX}, ${frameOffsetY} (arrows)  scale ${Math.round(frameScale * 100)}% (+/-)\n` +
+      `content offset ${contentOffsetX}, ${contentOffsetY} (shift+arrows)  scale ${Math.round(contentScale * 100)}% (shift +/-)  [backspace to reset all]`;
   }
 
   requestAnimationFrame(frame);
@@ -424,18 +470,68 @@ window.addEventListener('keydown', (e) => {
     frameEnabled = !frameEnabled;
     frameOverlayEl.hidden = !frameEnabled;
     resize();
-  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-    // Ignore while a form control has focus — its own arrow-key behavior
-    // (moving a select, nudging a range slider) should win instead.
+  } else if (/^[1-9]$/.test(e.key)) {
+    // Ignore while a form control has focus — a select's own type-ahead,
+    // or just typing into a field, should win instead.
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 
-    const order = VIDEO_SOURCE_ORDER;
-    const delta = e.key === 'ArrowRight' ? 1 : -1;
-    const idx = order.indexOf(styleVideoSourceEl.value);
-    const next = order[(idx + delta + order.length) % order.length];
-    styleVideoSourceEl.value = next;
-    styleVideoSourceEl.dispatchEvent(new Event('input', { bubbles: true }));
+    const idx = Number(e.key) - 1;
+    if (idx < VIDEO_SOURCE_ORDER.length) {
+      styleVideoSourceEl.value = VIDEO_SOURCE_ORDER[idx];
+      styleVideoSourceEl.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  } else if (frameEnabled && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    // Fine position nudge — only live while the frame is actually showing,
+    // so plain arrow keys are free to do nothing (or whatever a focused
+    // control wants) otherwise. Shift moves just the canvas (text/history
+    // layers) relative to the frame image instead of the whole composition.
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+    const step = 1;
+    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+    if (e.shiftKey) {
+      contentOffsetX += dx;
+      contentOffsetY += dy;
+    } else {
+      frameOffsetX += dx;
+      frameOffsetY += dy;
+    }
+    resize();
+    saveFrameAdjust();
+    e.preventDefault();
+  } else if (frameEnabled && (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_')) {
+    // Fine scale nudge — '=' is included alongside '+' since that's the
+    // unshifted key that types '+' on a standard layout, and likewise '_'
+    // alongside '-'. Shift here picks the target the same way it does for
+    // the arrow keys above: content (canvas) instead of the whole frame.
+    // Checked via e.shiftKey rather than e.key so it still works if '+'
+    // itself doesn't require shift on a given keyboard (e.g. numpad).
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+    const scaleStep = 0.02;
+    const grow = e.key === '+' || e.key === '=';
+    const delta = grow ? scaleStep : -scaleStep;
+    if (e.shiftKey) {
+      contentScale = Math.max(0.1, Math.min(5, contentScale + delta));
+    } else {
+      frameScale = Math.max(0.1, Math.min(5, frameScale + delta));
+    }
+    resize();
+    saveFrameAdjust();
+    e.preventDefault();
+  } else if (frameEnabled && (e.key === 'Backspace' || e.key === 'Delete')) {
+    frameOffsetX = 0;
+    frameOffsetY = 0;
+    frameScale = 1;
+    contentOffsetX = 0;
+    contentOffsetY = 0;
+    contentScale = 1;
+    resize();
+    saveFrameAdjust();
   }
 });
 
@@ -455,21 +551,86 @@ glCanvas.addEventListener('webglcontextlost', (e) => {
 // Real speech can occasionally revise or extend the wording right at
 // finalization — that revision is deliberately not reflected here, since
 // it was never shown live.
-let spokenWordCount = 0;
+// The words already committed to history for the utterance in progress,
+// and the volume each was captured at (same index). Diffed by
+// longest-common-prefix against each new interim result rather than just
+// a word count: Chrome's recognizer only ever appends to the transcript,
+// but SpeechBridge's on-device recognizer revises its hypothesis as more
+// audio arrives — the word count can shrink mid-utterance as earlier
+// words get corrected. A count alone desyncs the moment that happens
+// (every later slice() comes up empty against the new, shorter array)
+// and silently drops the rest of the utterance's words until the
+// transcript grows back past the old peak.
+let spokenWords = [];
+let spokenVolumes = [];
+
+// User MIDI notes fire as one settled sequence after the utterance ends,
+// not live per word — since SpeechBridge's revising hypothesis means an
+// interim word can still change, sending its note immediately risks
+// playing notes for words that get corrected a moment later. History/text
+// still update live; this only changes when the *notes* go out. Corpus
+// notes are unaffected (monologue text can't revise itself, so there's
+// nothing to wait out) — see the monologue onWord callback below.
+//
+// "After the utterance" is decided by the same speech-vs-silence grace
+// timer that lets the corpus monologue resume (see RESUME_GRACE_MS below),
+// not by isFinal: isFinal is reliable on the Chrome fallback (fires once
+// per utterance) but SpeechBridge's on-device recognizer was observed
+// over 20+ seconds of continuous speech, multiple sentences, never
+// firing it even once — it just keeps revising one long-running
+// hypothesis. flushUserNotes() is also still called on isFinal, so the
+// Chrome path flushes promptly rather than waiting out the full grace
+// window; calling it twice for the same utterance is harmless since the
+// buffers are already empty the second time — in theory. In practice,
+// SpeechBridge was observed delivering its last message for an utterance
+// twice around finalization (likely the recognition task's completion
+// handler firing again while being cancelled/torn down), so both the
+// isFinal path and the grace-timer path really did each see a full,
+// identical, non-empty buffer once. lastFlushed guards against firing
+// the same word sequence twice in a short window; DUPLICATE_GUARD_MS is
+// short enough that a genuine repeated sentence later still gets through.
+const USER_NOTE_SPACING_MS = 120;
+const DUPLICATE_GUARD_MS = 2000;
+let lastFlushedKey = null;
+let lastFlushedAt = 0;
+
+function flushUserNotes() {
+  const words = spokenWords;
+  const volumes = spokenVolumes;
+  spokenWords = [];
+  spokenVolumes = [];
+  if (words.length === 0) return;
+
+  const key = words.join('\n');
+  const now = performance.now();
+  if (key === lastFlushedKey && now - lastFlushedAt < DUPLICATE_GUARD_MS) return;
+  lastFlushedKey = key;
+  lastFlushedAt = now;
+
+  words.forEach((word, i) => {
+    setTimeout(() => {
+      midiOutput.sendWordNote(word, 'user', Math.round(volumes[i] * 126) + 1);
+    }, i * USER_NOTE_SPACING_MS);
+  });
+}
 
 function onPhrase(text, isFinal) {
   if (isFinal) {
+    flushUserNotes();
     historyLayer.endUtterance();
     textLayer.finishUtterance();
-    spokenWordCount = 0;
   } else {
     const volume = micVolume.getNormalized(micFloorDb, micCeilDb);
     const words = text.trim().split(/\s+/).filter(Boolean);
-    words.slice(spokenWordCount).forEach((word, i) => {
-      historyLayer.addWord(word, { firstOfUtterance: spokenWordCount === 0 && i === 0, volume });
-      midiOutput.sendWordNote(word, 'user', Math.round(volume * 126) + 1);
+    let common = 0;
+    while (common < spokenWords.length && common < words.length && spokenWords[common] === words[common]) {
+      common++;
+    }
+    words.slice(common).forEach((word, i) => {
+      historyLayer.addWord(word, { firstOfUtterance: common === 0 && i === 0, volume });
+      spokenVolumes[common + i] = volume;
     });
-    spokenWordCount = words.length;
+    spokenWords = words;
     textLayer.setPhrase(text, { dim: false, volume });
   }
 }
@@ -518,6 +679,7 @@ function onSpeechResult(text, isFinal) {
   clearTimeout(resumeTimer);
   resumeTimer = setTimeout(() => {
     userSpeaking = false;
+    flushUserNotes();
     monologue.resume();
   }, RESUME_GRACE_MS);
 
