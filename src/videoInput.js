@@ -2,21 +2,16 @@
 // Nothing is ever recorded or sent anywhere — frames only exist as a
 // WebGL texture for the current draw.
 //
-// Sources: the live camera, a synthetic animated test pattern, or one of
-// a handful of pre-loaded mirror clips (served from public/videos/ so
-// Vite copies them as-is rather than trying to bundle them). The test
-// pattern needs no permissions or hardware, so it's the way to rehearse
-// the look without a camera — and the way to tell a camera problem apart
-// from a rendering one. The mirror clips reuse the same <video> element
-// as the camera (just pointed at a file instead of a live stream), so
-// `ready`/`aspect`/`frameSource` need no per-source branching for them.
+// Sources: the live camera, or one of a handful of pre-loaded mirror
+// clips (served from public/videos/ so Vite copies them as-is rather
+// than trying to bundle them). The mirror clips reuse the same <video>
+// element as the camera (just pointed at a file instead of a live
+// stream), so `ready`/`aspect`/`frameSource` need no per-source
+// branching for them.
 
-const TEST_W = 640;
-const TEST_H = 360;
-
-// Looping stock clips available as video-fill sources, in addition to the
-// live camera and the test pattern. Labels are generic since the clips'
-// content isn't meaningful to the code — just distinct selectable options.
+// Looping stock clips available as video-fill sources, in addition to
+// the live camera. Labels are generic since the clips' content isn't
+// meaningful to the code — just distinct selectable options.
 export const MIRROR_VIDEOS = [
   { id: 'mirror1', label: 'Mirror clip 1', path: '/videos/8724310-uhd_2160_4096_25fps.mp4' },
   { id: 'mirror2', label: 'Mirror clip 2', path: '/videos/12908966-uhd_2160_3840_24fps.mp4' },
@@ -24,9 +19,19 @@ export const MIRROR_VIDEOS = [
   { id: 'mirror4', label: 'Mirror clip 4', path: '/videos/14652363_1080_1920_30fps.mp4' },
 ];
 
+// Devices only get real labels once the page has been granted camera
+// permission at least once — before that they come back blank, which
+// callers should fall back to a generic "Camera N" label for.
+export async function listCameraDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices.filter((d) => d.kind === 'videoinput');
+}
+
 export class VideoInput {
   constructor({ source = 'camera' } = {}) {
     this.source = source;
+    this.cameraDeviceId = null; // null = browser's own default choice
 
     this.video = document.createElement('video');
     this.video.autoplay = true;
@@ -46,12 +51,6 @@ export class VideoInput {
     });
     document.body.appendChild(this.video);
 
-    this.testCanvas = document.createElement('canvas');
-    this.testCanvas.width = TEST_W;
-    this.testCanvas.height = TEST_H;
-    this.testCtx = this.testCanvas.getContext('2d');
-    this.testPhase = 0;
-
     this.stream = null;
     this.state = 'off'; // off | starting | live | error
     this.error = null;
@@ -61,62 +60,29 @@ export class VideoInput {
     this.source = source;
   }
 
-  // The object handed to texImage2D — a <video> or the test <canvas>.
+  // deviceId: a MediaDeviceInfo.deviceId from listCameraDevices(), or
+  // null/'' for the browser's default. Only takes effect on the next
+  // start() — call it again to switch live if the camera is already running.
+  setCameraDevice(deviceId) {
+    this.cameraDeviceId = deviceId || null;
+  }
+
+  // The object handed to texImage2D.
   get frameSource() {
-    return this.source === 'test' ? this.testCanvas : this.video;
+    return this.video;
   }
 
   // True only once there's an actual decoded frame with real dimensions —
   // uploading before that throws or yields a garbage texture.
   get ready() {
-    if (this.source === 'test') return true;
     return this.video.readyState >= 2 && this.video.videoWidth > 0;
   }
 
   get aspect() {
-    if (this.source === 'test') return TEST_W / TEST_H;
     return this.ready ? this.video.videoWidth / this.video.videoHeight : 1;
   }
 
-  // Animated so it's obvious at a glance that live frames are landing,
-  // and high-contrast so the fill can't be mistaken for "nothing".
-  update(dtMs) {
-    if (this.source !== 'test') return;
-    this.testPhase += dtMs / 1000;
-
-    const ctx = this.testCtx;
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, TEST_W, TEST_H);
-
-    const bandWidth = 60;
-    const offset = (this.testPhase * 90) % (bandWidth * 2);
-    for (let x = -bandWidth * 2; x < TEST_W + bandWidth * 2; x += bandWidth * 2) {
-      ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.moveTo(x + offset, 0);
-      ctx.lineTo(x + offset + bandWidth, 0);
-      ctx.lineTo(x + offset + bandWidth - TEST_H, TEST_H);
-      ctx.lineTo(x + offset - TEST_H, TEST_H);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    // A pulsing blob, so there's a moving soft-edged region too.
-    const cx = TEST_W * (0.5 + 0.35 * Math.sin(this.testPhase * 0.7));
-    const cy = TEST_H * 0.5;
-    const r = TEST_H * 0.45;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0, 'rgba(255,255,255,1)');
-    grad.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, TEST_W, TEST_H);
-  }
-
   async start() {
-    if (this.source === 'test') {
-      this.state = 'live';
-      return;
-    }
     this.state = 'starting';
     this.error = null;
     try {
@@ -141,7 +107,8 @@ export class VideoInput {
         throw new Error('getUserMedia unavailable (page must be on localhost or https)');
       }
       this.video.removeAttribute('src');
-      this.stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      const videoConstraint = this.cameraDeviceId ? { deviceId: { exact: this.cameraDeviceId } } : true;
+      this.stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraint, audio: false });
       this.video.srcObject = this.stream;
       await this.video.play();
       this.state = 'live';

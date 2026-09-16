@@ -7,16 +7,24 @@ rendered in a blackletter typeface, run through an 8-way radial-mirror
 text a receding, fractal-like depth — spiraling into itself rather than
 just sitting as a mirrored still.
 
-No backend, no network dependency once loaded (aside from the Google Font
-on first load) — it's designed to run unattended on one machine for the
-length of a show.
+No backend, genuinely zero network dependency once loaded — it's designed
+to run unattended on one machine for the length of a show. (A field test
+found two undocumented internet dependencies that used to hide behind that
+claim: the blackletter font was loaded from Google Fonts, and — bigger —
+Chrome's speech recognition is actually cloud-backed. Both are fixed: the
+font is now self-hosted, and speech recognition prefers a local, fully
+on-device helper — see below.)
 
 ## How it works
 
-- **Speech capture** ([src/speech.js](src/speech.js)) — Web Speech API,
-  continuous mode, auto-restarts the recognizer whenever the browser stops
-  it (which Chrome does periodically even in continuous mode), so it
-  survives long unattended runs.
+- **Speech capture** ([src/speech.js](src/speech.js)) — tries
+  [native/SpeechBridge](native/SpeechBridge) first (a local macOS app doing
+  continuous on-device recognition, streamed in over Server-Sent Events),
+  and only falls back to the browser's own `webkitSpeechRecognition` if
+  that helper isn't running. The browser path is Chrome-only *and* actually
+  sends audio to Google's servers to transcribe it — despite living in the
+  browser, it needs internet. Either way, both auto-restart on end/error so
+  a show survives hours unattended.
 - **Text layer** ([src/textLayer.js](src/textLayer.js)) — draws the current
   phrase to an offscreen 2D canvas (auto-sized, word-wrapped, fade
   in/out), which is used as a texture input for the shader pipeline below.
@@ -72,6 +80,25 @@ npm run preview
 Then open the printed URL fullscreen (`Cmd+Ctrl+F` in Chrome on macOS) and
 click to start.
 
+**For offline speech recognition** (recommended for any show without
+reliable internet — see "How it works" above), also build and launch the
+native helper once beforehand:
+
+```bash
+cd native/SpeechBridge
+./build.sh
+open SpeechBridge.app
+```
+
+Launch it with `open` (or double-click it in Finder) — not by running the
+binary inside `Contents/MacOS/` directly, which macOS's permission system
+won't correctly attribute the Microphone/Speech Recognition prompts to. The
+first run asks for both; grant them. It logs to `/tmp/speechbridge.log`
+since `open` detaches it from any terminal you launched it from. Leave it
+running in the background — the web app finds it automatically on
+`http://127.0.0.1:8765/` and falls back to the browser's own recognizer
+(needs internet) if it's ever not running.
+
 **Fallback with no Node at all:** `npm run build` produces a plain
 static `dist/` folder. If Node/Vite becomes unavailable on show day, any
 static file server works, e.g. `cd dist && python3 -m http.server 8080`.
@@ -89,14 +116,19 @@ shader parameters (wedge count, rotation speed, decay).
 
 ## Tested with
 
-- Chrome on macOS (Darwin), desktop. Chrome is required — Web Speech API
-  continuous recognition is unreliable-to-absent in Firefox and Safari.
-- The kaleidoscope/feedback shader pipeline itself was verified rendering
+- Chrome on macOS (Darwin), desktop. Chrome is required for the browser
+  fallback recognizer — Web Speech API continuous recognition is
+  unreliable-to-absent in Firefox and Safari. SpeechBridge itself doesn't
+  care which browser is showing the page, since its mic access happens
+  outside the browser entirely.
+- The kaleidoscope/feedback shader pipeline was verified rendering
   correctly (radial mirror + fractal feedback depth, live parameter
-  remapping from injected phrases) using the built-in Vite dev server.
-  Verify the microphone capture path yourself in an actual Chrome window —
-  a sandboxed preview browser can't grant mic access, so that leg wasn't
-  exercised end-to-end here.
+  remapping) using the built-in Vite dev server.
+- SpeechBridge was verified end-to-end on real hardware: built, launched,
+  granted permissions, and confirmed transcribing live speech on-device,
+  streaming it into the running app over SSE, and rendering it through the
+  full pipeline in the self-hosted blackletter font — all with no network
+  request beyond `localhost`.
 
 ## Projection-mapping / video-source integration
 

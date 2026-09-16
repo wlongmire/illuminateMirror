@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Illuminate Philly — Live Transcription Display</title>
 <style>
+  /* Self-hosted (not fonts.googleapis.com) so the piece has zero network
+     dependency once loaded — a show with no internet still gets the
+     intended blackletter look. SIL Open Font License, see
+     public/fonts/OFL.txt. */
+  @font-face {
+    font-family: 'UnifrakturCook';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('/fonts/UnifrakturCook-Bold.woff2') format('woff2');
+  }
   :root { color-scheme: dark; }
   html, body {
     margin: 0; padding: 0; width: 100%; height: 100%;
@@ -105,6 +116,7 @@
     <h3>Typography</h3>
     <label>Font
       <select id="styleFont">
+        <option value="'UnifrakturCook', serif">Blackletter</option>
         <option value="system-ui, sans-serif">System UI</option>
         <option value="Arial, Helvetica, sans-serif">Arial</option>
         <option value="Georgia, serif">Georgia</option>
@@ -197,7 +209,11 @@
     <label>Source
       <select id="styleVideoSource">
         <option value="camera">Camera</option>
-        <option value="test">Test pattern</option>
+      </select>
+    </label>
+    <label>Camera device
+      <select id="styleCameraDevice">
+        <option value="">Default</option>
       </select>
     </label>
     <label>

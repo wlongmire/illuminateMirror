@@ -3,7 +3,7 @@ import { TextLayer } from './textLayer.js';
 import { HistoryLayer } from './historyLayer.js';
 import { Renderer } from './renderer.js';
 import { Monologue } from './monologue.js';
-import { VideoInput, MIRROR_VIDEOS } from './videoInput.js';
+import { VideoInput, MIRROR_VIDEOS, listCameraDevices } from './videoInput.js';
 import { MidiOutput } from './midiOutput.js';
 import { MicVolumeMeter } from './micVolume.js';
 
@@ -47,6 +47,7 @@ const styleCorpusFrequencyEl = document.getElementById('styleCorpusFrequency');
 const styleCorpusFrequencyVal = document.getElementById('styleCorpusFrequencyVal');
 const corpusSineControlsEl = document.getElementById('corpusSineControls');
 const styleVideoSourceEl = document.getElementById('styleVideoSource');
+const styleCameraDeviceEl = document.getElementById('styleCameraDevice');
 const styleVideoInfluenceEl = document.getElementById('styleVideoInfluence');
 const styleVideoInfluenceVal = document.getElementById('styleVideoInfluenceVal');
 const styleVideoGainEl = document.getElementById('styleVideoGain');
@@ -60,6 +61,8 @@ const styleMicCeilVal = document.getElementById('styleMicCeilVal');
 
 // Mirror clip options aren't hardcoded in index.html — added here from the
 // single manifest in videoInput.js so there's one place that knows about them.
+// Also doubles as the cycling order for the left/right-arrow shortcut below.
+const VIDEO_SOURCE_ORDER = ['camera', ...MIRROR_VIDEOS.map((v) => v.id)];
 for (const v of MIRROR_VIDEOS) {
   const opt = document.createElement('option');
   opt.value = v.id;
@@ -80,10 +83,10 @@ function setLive(isLive) {
 // ---- Text style (persisted rehearsal tuning) -----------------------------
 const STYLE_STORAGE_KEY = 'illuminate:textStyle';
 const DEFAULT_STYLE = {
-  fontFamily: 'system-ui, sans-serif', fontWeight: 700, sizeScale: 1, userSizeScale: 1, userVolumeBoost: 0.6, letterSpacing: 0,
+  fontFamily: "'UnifrakturCook', serif", fontWeight: 700, sizeScale: 1, userSizeScale: 1, userVolumeBoost: 0.6, letterSpacing: 0,
   transitionMs: 300, holdMs: 1200,
   corpusMode: 'sine', corpusBaseMs: 300, corpusAmplitudeMs: 150, corpusFrequencyHz: 0.2,
-  videoSource: 'camera', videoInfluence: 0, videoGain: 1,
+  videoSource: 'camera', cameraDeviceId: '', videoInfluence: 0, videoGain: 1,
   corpusAlpha: 1, userAlpha: 0.65,
   userWordSizeScale: 0.8, volumeSizeBoost: 2,
   // MIDI: user-note velocity comes from live mic level (calibrated by the
@@ -114,11 +117,42 @@ const historyLayer = new HistoryLayer({
   userWordSizeScale: initialStyle.userWordSizeScale,
   volumeSizeBoost: initialStyle.volumeSizeBoost,
 });
-// Live camera (or test pattern), used to fill both history layers — see
-// renderer's video pass.
+// Live camera (or one of the mirror clips), used to fill both history
+// layers — see renderer's video pass.
 const videoInput = new VideoInput({ source: initialStyle.videoSource });
+videoInput.setCameraDevice(initialStyle.cameraDeviceId);
 let videoInfluence = initialStyle.videoInfluence;
 let videoGain = initialStyle.videoGain;
+
+// Starts/restarts videoInput and, on a successful camera start, refreshes
+// the device list — device labels are blank until permission is granted,
+// so the first real start is also the first chance to show real names.
+function startVideoInput() {
+  videoInput.start()
+    .then(() => {
+      if (videoInput.source === 'camera') refreshCameraDevices();
+    })
+    .catch((e) => logError('Video unavailable: ' + e.message));
+}
+
+// `preferredValue` defaults to whatever's currently selected (used when
+// devices change mid-session); the very first call instead passes the
+// saved style's choice, since at that point the panel hasn't applied it
+// yet and the <select> only has the placeholder "Default" option.
+async function refreshCameraDevices(preferredValue = styleCameraDeviceEl.value) {
+  const cams = await listCameraDevices();
+  styleCameraDeviceEl.innerHTML = '<option value="">Default</option>';
+  cams.forEach((d, i) => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `Camera ${i + 1}`;
+    styleCameraDeviceEl.appendChild(opt);
+  });
+  const stillExists = [...styleCameraDeviceEl.options].some((o) => o.value === preferredValue);
+  styleCameraDeviceEl.value = stillExists ? preferredValue : '';
+}
+refreshCameraDevices(initialStyle.cameraDeviceId);
+navigator.mediaDevices?.addEventListener?.('devicechange', refreshCameraDevices);
 
 // MIDI out (one note per word, to an IAC bus) + a second, independent mic
 // stream used only to read the live input level for user-note velocity —
@@ -178,6 +212,7 @@ function applyStyleToPanel(style) {
   styleCorpusFrequencyVal.textContent = formatFrequency(style.corpusFrequencyHz);
   corpusSineControlsEl.hidden = style.corpusMode !== 'sine';
   styleVideoSourceEl.value = style.videoSource;
+  styleCameraDeviceEl.value = style.cameraDeviceId;
   styleVideoInfluenceEl.value = Math.round(style.videoInfluence * 100);
   styleVideoInfluenceVal.textContent = `${Math.round(style.videoInfluence * 100)}%`;
   styleVideoGainEl.value = style.videoGain;
@@ -210,6 +245,7 @@ function onStyleInput() {
     corpusAmplitudeMs: Number(styleCorpusAmplitudeEl.value),
     corpusFrequencyHz: Number(styleCorpusFrequencyEl.value),
     videoSource: styleVideoSourceEl.value,
+    cameraDeviceId: styleCameraDeviceEl.value,
     videoInfluence: Number(styleVideoInfluenceEl.value) / 100,
     videoGain: Number(styleVideoGainEl.value),
     corpusVelocity: Number(styleCorpusVelocityEl.value),
@@ -237,18 +273,20 @@ function onStyleInput() {
   corpusVelocity = style.corpusVelocity;
   micFloorDb = style.micFloorDb;
   micCeilDb = style.micCeilDb;
-  if (style.videoSource !== videoInput.source) {
-    videoInput.setSource(style.videoSource);
-    if (style.videoSource === 'camera') {
-      // Switching to the camera mid-run may need it started for the first time.
-      if (videoInput.state !== 'live') {
-        videoInput.start().catch((e) => logError('Camera unavailable: ' + e.message));
-      }
-    } else if (style.videoSource !== 'test') {
-      // A mirror clip: always (re)start, since each one points the shared
-      // <video> element at a different file even if one was already live.
-      videoInput.start().catch((e) => logError('Video unavailable: ' + e.message));
-    }
+  const sourceChanged = style.videoSource !== videoInput.source;
+  const deviceChanged = (style.cameraDeviceId || '') !== (videoInput.cameraDeviceId || '');
+  videoInput.setSource(style.videoSource);
+  videoInput.setCameraDevice(style.cameraDeviceId);
+  if (sourceChanged) {
+    // Always (re)start on switch — every source (camera or a mirror clip)
+    // points the shared <video> element at something different, even if
+    // videoInput.state is already 'live' from whatever was playing before.
+    startVideoInput();
+  } else if (deviceChanged && videoInput.source === 'camera') {
+    // Only restart for a device change if the camera is the thing actually
+    // showing right now — otherwise the new device just gets remembered
+    // for whenever the source is switched back to camera later.
+    startVideoInput();
   }
   textLayer.setStyle(style);
   textLayer.setUserSizeScale(style.userSizeScale);
@@ -272,7 +310,7 @@ function onStyleInput() {
   styleFontEl, styleWeightEl, styleSizeEl, styleUserSizeEl, styleUserVolumeBoostEl, styleSpacingEl,
   styleTransitionEl, styleHoldEl, styleCorpusModeEl, styleCorpusBaseEl,
   styleCorpusAmplitudeEl, styleCorpusFrequencyEl,
-  styleVideoSourceEl, styleVideoInfluenceEl, styleVideoGainEl,
+  styleVideoSourceEl, styleCameraDeviceEl, styleVideoInfluenceEl, styleVideoGainEl,
   styleCorpusAlphaEl, styleUserAlphaEl, styleUserWordSizeEl, styleVolumeBoostEl,
   styleCorpusVelocityEl, styleMicFloorEl, styleMicCeilEl,
 ].forEach((el) => {
@@ -346,7 +384,6 @@ function frame(t) {
 
   textLayer.update(dtMs);
   historyLayer.update(dtMs);
-  videoInput.update(dtMs);
   if (renderer) {
     try {
       renderer.render({
@@ -387,6 +424,18 @@ window.addEventListener('keydown', (e) => {
     frameEnabled = !frameEnabled;
     frameOverlayEl.hidden = !frameEnabled;
     resize();
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    // Ignore while a form control has focus — its own arrow-key behavior
+    // (moving a select, nudging a range slider) should win instead.
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+    const order = VIDEO_SOURCE_ORDER;
+    const delta = e.key === 'ArrowRight' ? 1 : -1;
+    const idx = order.indexOf(styleVideoSourceEl.value);
+    const next = order[(idx + delta + order.length) % order.length];
+    styleVideoSourceEl.value = next;
+    styleVideoSourceEl.dispatchEvent(new Event('input', { bubbles: true }));
   }
 });
 
@@ -491,7 +540,7 @@ startBtn.addEventListener('click', () => {
   monologue.start();
   // Camera is optional — if it's denied or absent, the video fill just
   // never kicks in and everything else runs exactly as before.
-  videoInput.start().catch((e) => logError('Camera unavailable: ' + e.message));
+  startVideoInput();
   // Same for MIDI/mic-volume: if the IAC bus isn't there or the mic is
   // denied, word notes just stop firing rather than breaking anything else.
   midiOutput.connect('IAC').catch((e) => logError('MIDI unavailable: ' + e.message));
