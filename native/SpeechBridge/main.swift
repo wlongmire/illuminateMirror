@@ -41,14 +41,15 @@ let port: NWEndpoint.Port = 8765
 
 // MARK: - Server-Sent Events server
 
-// Deliberately minimal: this only ever needs to serve one kind of response
-// (an open SSE stream) to one kind of client (the page's EventSource), so
-// it skips real HTTP request parsing — the mere fact that a client has
-// connected and sent anything at all is treated as "please stream to me."
+// Deliberately minimal: it serves exactly two things to one client (the
+// page) — `GET /gate?open=<dB>&close=<dB>` sets the proximity gate's
+// thresholds, and any other request is treated as "please stream to me"
+// (an open SSE stream). Only the request line is looked at.
 final class SSEServer {
   private var listener: NWListener?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
   private let queue = DispatchQueue(label: "speechbridge.sse")
+  var onGate: ((_ openDb: Float, _ closeDb: Float) -> Void)?
 
   func start() {
     let params = NWParameters.tcp
@@ -80,8 +81,16 @@ final class SSEServer {
     conn.start(queue: queue)
     // Wait for the client's request bytes before replying — sending before
     // the connection is actually writable can silently drop the response.
-    conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] _, _, _, error in
+    conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, error in
       guard let self = self, error == nil else { return }
+      let requestLine = data
+        .flatMap { String(data: $0, encoding: .utf8) }?
+        .components(separatedBy: "\r\n").first ?? ""
+      let target = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+      if let url = URLComponents(string: target), url.path == "/gate" {
+        self.handleGate(url, conn)
+        return
+      }
       let headers = "HTTP/1.1 200 OK\r\n"
         + "Content-Type: text/event-stream\r\n"
         + "Cache-Control: no-cache\r\n"
@@ -90,6 +99,22 @@ final class SSEServer {
       conn.send(content: headers.data(using: .utf8), completion: .contentProcessed { _ in })
       self.queue.async { self.connections[id] = conn }
     }
+  }
+
+  private func handleGate(_ url: URLComponents, _ conn: NWConnection) {
+    func value(_ name: String) -> Float? {
+      url.queryItems?.first { $0.name == name }?.value.flatMap { Float($0) }
+    }
+    let ok = value("open") != nil && value("close") != nil
+    if let open = value("open"), let close = value("close") {
+      onGate?(open, close)
+    }
+    let status = ok ? "204 No Content" : "400 Bad Request"
+    let response = "HTTP/1.1 \(status)\r\n"
+      + "Access-Control-Allow-Origin: *\r\n"
+      + "Content-Length: 0\r\n"
+      + "Connection: close\r\n\r\n"
+    conn.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in conn.cancel() })
   }
 
   private func emit(_ event: String) {
@@ -112,6 +137,13 @@ final class SSEServer {
           let str = String(data: json, encoding: .utf8) else { return }
     emit("event: state\ndata: \(str)\n\n")
   }
+
+  func broadcastLevel(db: Float, gateOpen: Bool) {
+    let clamped = db.isFinite ? Double(max(db, -120)) : -120
+    guard let json = try? JSONSerialization.data(withJSONObject: ["db": clamped, "gateOpen": gateOpen]),
+          let str = String(data: json, encoding: .utf8) else { return }
+    emit("event: level\ndata: \(str)\n\n")
+  }
 }
 
 // MARK: - Continuous on-device recognition
@@ -130,8 +162,81 @@ final class SpeechBridge {
   private var intentionalStop = false
   private var tapInstalled = false
 
+  // MARK: Proximity noise gate
+  //
+  // The mic sits right against the speaker's mouth, so their voice arrives
+  // far louder than anyone talking a few feet away. Rather than transcribe
+  // everything the mic hears, buffers below gateCloseDb are simply never
+  // appended to the recognition request — as far as the recognizer is
+  // concerned, distant/bystander speech is silence.
+  //
+  // Two thresholds (a Schmitt trigger) instead of one: the gate opens at
+  // gateOpenDb and, once open, only closes once level drops below the
+  // lower gateCloseDb — this stops a voice hovering right at one boundary
+  // from chattering open/closed word to word. gateReleaseSec additionally
+  // holds the gate open briefly after level drops, so the trailing end of
+  // a word (naturally quieter than its middle) doesn't get clipped.
+  //
+  // The thresholds are tuned live from the page's style panel (sent via
+  // GET /gate on every connect and every slider change); the values here
+  // are only what's used before a page has connected. The measured level
+  // streams back to the page (SSE "level" events) so tuning is visual.
+  private let gateLock = NSLock()
+  private var gateOpenDb: Float = -30
+  private var gateCloseDb: Float = -40
+  private let gateReleaseSec: TimeInterval = 0.35
+  private let levelBroadcastSec: TimeInterval = 0.1
+  private var gateOpen = false
+  private var lastLoudAt = Date.distantPast
+  private var lastLevelSentAt = Date.distantPast
+
   init(server: SSEServer) {
     self.server = server
+  }
+
+  func setGate(openDb: Float, closeDb: Float) {
+    gateLock.lock()
+    gateOpenDb = openDb
+    gateCloseDb = min(closeDb, openDb)
+    gateLock.unlock()
+    log(String(format: "gate thresholds set: open %.0f dB, close %.0f dB", openDb, min(closeDb, openDb)))
+  }
+
+  private func levelDb(of buffer: AVAudioPCMBuffer) -> Float {
+    guard let channelData = buffer.floatChannelData else { return -.infinity }
+    let frameLength = Int(buffer.frameLength)
+    guard frameLength > 0 else { return -.infinity }
+    let channelCount = Int(buffer.format.channelCount)
+    var sumSquares: Float = 0
+    for channel in 0..<channelCount {
+      let samples = channelData[channel]
+      for i in 0..<frameLength { sumSquares += samples[i] * samples[i] }
+    }
+    let rms = sqrt(sumSquares / Float(frameLength * channelCount))
+    return rms > 0 ? 20 * log10(rms) : -.infinity
+  }
+
+  // Returns whether this buffer should be forwarded to the recognizer.
+  private func gateAllows(_ buffer: AVAudioPCMBuffer) -> Bool {
+    let db = levelDb(of: buffer)
+    gateLock.lock()
+    let openDb = gateOpenDb
+    let closeDb = gateCloseDb
+    gateLock.unlock()
+
+    let now = Date()
+    if db >= openDb {
+      gateOpen = true
+      lastLoudAt = now
+    } else if db < closeDb, gateOpen, now.timeIntervalSince(lastLoudAt) > gateReleaseSec {
+      gateOpen = false
+    }
+
+    if now.timeIntervalSince(lastLevelSentAt) >= levelBroadcastSec {
+      lastLevelSentAt = now
+      server.broadcastLevel(db: db, gateOpen: gateOpen)
+    }
+    return gateOpen
   }
 
   func requestPermissions(_ completion: @escaping (Bool, String?) -> Void) {
@@ -172,7 +277,8 @@ final class SpeechBridge {
     if tapInstalled { inputNode.removeTap(onBus: 0) }
     // Smaller buffer = audio reaches the recognizer in finer-grained
     // chunks, shaving a little more off the delay before it can react.
-    inputNode.installTap(onBus: 0, bufferSize: 512, format: format) { buffer, _ in
+    inputNode.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
+      guard let self = self, self.gateAllows(buffer) else { return }
       req.append(buffer)
     }
     tapInstalled = true
@@ -232,6 +338,7 @@ let server = SSEServer()
 server.start()
 
 let bridge = SpeechBridge(server: server)
+server.onGate = { open, close in bridge.setGate(openDb: open, closeDb: close) }
 log("requesting microphone + speech recognition permissions...")
 bridge.requestPermissions { granted, message in
   guard granted else {

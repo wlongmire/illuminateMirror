@@ -240,6 +240,19 @@
       <span class="row"><span>Mic ceiling</span><span id="styleMicCeilVal">-12dB</span></span>
       <input type="range" id="styleMicCeil" min="-30" max="0" step="1" value="-12">
     </label>
+
+    <hr>
+
+    <h3>Proximity gate (SpeechBridge only)</h3>
+    <span class="row"><span>Level</span><span id="gateReadout">not connected</span></span>
+    <label>
+      <span class="row"><span>Gate open</span><span id="styleGateOpenVal">-30dB</span></span>
+      <input type="range" id="styleGateOpen" min="-90" max="0" step="1" value="-30">
+    </label>
+    <label>
+      <span class="row"><span>Gate close</span><span id="styleGateCloseVal">-40dB</span></span>
+      <input type="range" id="styleGateClose" min="-90" max="0" step="1" value="-40">
+    </label>
   </div>
 
   <script type="module" src="/src/main.js"></script>

@@ -15,10 +15,16 @@
 const NATIVE_BRIDGE_URL = 'http://127.0.0.1:8765/';
 const NATIVE_CONNECT_TIMEOUT_MS = 1000;
 
+function sendNativeGate(gate) {
+  if (!gate) return;
+  const url = `${NATIVE_BRIDGE_URL}gate?open=${gate.openDb}&close=${gate.closeDb}`;
+  fetch(url, { mode: 'no-cors' }).catch(() => { /* resent on the next (re)connect */ });
+}
+
 // Resolves to a { stop() } once connected, or null if the helper isn't
 // reachable within the timeout — the caller falls back to the browser
 // recognizer in that case.
-function tryNativeBridge({ onResult, onStateChange, onError }) {
+function tryNativeBridge({ onResult, onStateChange, onLevel, getGate }) {
   return new Promise((resolve) => {
     let settled = false;
     const es = new EventSource(NATIVE_BRIDGE_URL);
@@ -31,6 +37,9 @@ function tryNativeBridge({ onResult, onStateChange, onError }) {
     }, NATIVE_CONNECT_TIMEOUT_MS);
 
     es.onopen = () => {
+      // Every (re)connect, not just the first: if SpeechBridge restarts
+      // mid-show it comes back with its built-in defaults.
+      sendNativeGate(getGate());
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
@@ -61,6 +70,12 @@ function tryNativeBridge({ onResult, onStateChange, onError }) {
     es.addEventListener('state', (e) => {
       try {
         onStateChange(JSON.parse(e.data).state === 'listening');
+      } catch (err) { /* ignore */ }
+    });
+    es.addEventListener('level', (e) => {
+      try {
+        const { db, gateOpen } = JSON.parse(e.data);
+        onLevel?.(db, gateOpen);
       } catch (err) { /* ignore */ }
     });
   });
@@ -127,19 +142,22 @@ function createBrowserSpeechRecognizer({ onResult, onStateChange, onError }) {
   };
 }
 
-export function createSpeechRecognizer({ onResult, onStateChange, onError }) {
+export function createSpeechRecognizer({ onResult, onStateChange, onError, onLevel }) {
   let active = null;
+  let backend = null;
   let intentionalStop = false;
+  let gate = null;
 
   async function begin() {
     intentionalStop = false;
-    const native = await tryNativeBridge({ onResult, onStateChange, onError });
+    const native = await tryNativeBridge({ onResult, onStateChange, onLevel, getGate: () => gate });
     if (intentionalStop) {
       if (native) native.stop();
       return;
     }
     if (native) {
       active = native;
+      backend = 'native';
       return;
     }
     const browser = createBrowserSpeechRecognizer({ onResult, onStateChange, onError });
@@ -148,6 +166,7 @@ export function createSpeechRecognizer({ onResult, onStateChange, onError }) {
       return;
     }
     active = browser;
+    backend = 'browser';
     browser.start();
   }
 
@@ -156,6 +175,14 @@ export function createSpeechRecognizer({ onResult, onStateChange, onError }) {
     // actually attempted the native bridge — so this stays true, and a
     // real failure surfaces via onError instead of gating the button.
     supported: true,
+    // null until start() has picked one; 'native' (SpeechBridge) or 'browser'.
+    get backend() { return backend; },
+    // Proximity gate thresholds — only SpeechBridge can apply them; the
+    // browser recognizer captures its own mic audio internally.
+    setGate(openDb, closeDb) {
+      gate = { openDb, closeDb };
+      if (backend === 'native') sendNativeGate(gate);
+    },
     start() { begin(); },
     stop() {
       intentionalStop = true;

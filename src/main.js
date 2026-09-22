@@ -58,6 +58,11 @@ const styleMicFloorEl = document.getElementById('styleMicFloor');
 const styleMicFloorVal = document.getElementById('styleMicFloorVal');
 const styleMicCeilEl = document.getElementById('styleMicCeil');
 const styleMicCeilVal = document.getElementById('styleMicCeilVal');
+const styleGateOpenEl = document.getElementById('styleGateOpen');
+const styleGateOpenVal = document.getElementById('styleGateOpenVal');
+const styleGateCloseEl = document.getElementById('styleGateClose');
+const styleGateCloseVal = document.getElementById('styleGateCloseVal');
+const gateReadoutEl = document.getElementById('gateReadout');
 
 // Mirror clip options aren't hardcoded in index.html — added here from the
 // single manifest in videoInput.js so there's one place that knows about them.
@@ -92,6 +97,9 @@ const DEFAULT_STYLE = {
   // MIDI: user-note velocity comes from live mic level (calibrated by the
   // floor/ceiling dB range below); corpus notes use a fixed velocity.
   corpusVelocity: 90, micFloorDb: -50, micCeilDb: -12,
+  // SpeechBridge proximity gate: audio quieter than this never reaches the
+  // recognizer, so only speech close to the mic gets transcribed.
+  gateOpenDb: -30, gateCloseDb: -40,
 };
 
 function loadStyle() {
@@ -223,6 +231,10 @@ function applyStyleToPanel(style) {
   styleMicFloorVal.textContent = `${style.micFloorDb}dB`;
   styleMicCeilEl.value = style.micCeilDb;
   styleMicCeilVal.textContent = `${style.micCeilDb}dB`;
+  styleGateOpenEl.value = style.gateOpenDb;
+  styleGateOpenVal.textContent = `${style.gateOpenDb}dB`;
+  styleGateCloseEl.value = style.gateCloseDb;
+  styleGateCloseVal.textContent = `${style.gateCloseDb}dB`;
 }
 applyStyleToPanel(initialStyle);
 
@@ -251,6 +263,8 @@ function onStyleInput() {
     corpusVelocity: Number(styleCorpusVelocityEl.value),
     micFloorDb: Number(styleMicFloorEl.value),
     micCeilDb: Number(styleMicCeilEl.value),
+    gateOpenDb: Number(styleGateOpenEl.value),
+    gateCloseDb: Number(styleGateCloseEl.value),
   };
   styleWeightVal.textContent = style.fontWeight;
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
@@ -273,6 +287,9 @@ function onStyleInput() {
   corpusVelocity = style.corpusVelocity;
   micFloorDb = style.micFloorDb;
   micCeilDb = style.micCeilDb;
+  styleGateOpenVal.textContent = `${style.gateOpenDb}dB`;
+  styleGateCloseVal.textContent = `${style.gateCloseDb}dB`;
+  recognizer.setGate(style.gateOpenDb, style.gateCloseDb);
   const sourceChanged = style.videoSource !== videoInput.source;
   const deviceChanged = (style.cameraDeviceId || '') !== (videoInput.cameraDeviceId || '');
   videoInput.setSource(style.videoSource);
@@ -313,6 +330,7 @@ function onStyleInput() {
   styleVideoSourceEl, styleCameraDeviceEl, styleVideoInfluenceEl, styleVideoGainEl,
   styleCorpusAlphaEl, styleUserAlphaEl, styleUserWordSizeEl, styleVolumeBoostEl,
   styleCorpusVelocityEl, styleMicFloorEl, styleMicCeilEl,
+  styleGateOpenEl, styleGateCloseEl,
 ].forEach((el) => {
   el.addEventListener('input', onStyleInput);
 });
@@ -690,7 +708,12 @@ const recognizer = createSpeechRecognizer({
   onResult: onSpeechResult,
   onStateChange: setLive,
   onError: logError,
+  onLevel: (db, gateOpen) => {
+    gateReadoutEl.textContent = `${db.toFixed(1)}dB · ${gateOpen ? 'open' : 'closed'}`;
+    gateReadoutEl.style.color = gateOpen ? '#6f6' : '';
+  },
 });
+recognizer.setGate(initialStyle.gateOpenDb, initialStyle.gateCloseDb);
 
 if (!recognizer.supported) {
   startBtn.disabled = true;

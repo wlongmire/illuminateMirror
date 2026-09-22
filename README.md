@@ -99,6 +99,20 @@ running in the background — the web app finds it automatically on
 `http://127.0.0.1:8765/` and falls back to the browser's own recognizer
 (needs internet) if it's ever not running.
 
+**Proximity noise gate.** If the mic sits close against the speaker (e.g. a
+lav/wireless capsule tucked inside a prop, phone receiver, etc.), SpeechBridge
+gates out quieter audio rather than transcribing everyone within earshot —
+buffers below a level threshold are never sent to the recognizer, so
+bystander/ambient speech is treated as silence. Tune it live from the style
+panel (`p`) under **Proximity gate**: the **Level** readout shows what
+SpeechBridge is measuring right now (green while the gate is open). Speak
+normally right at the mic, then from a few feet away, and set **Gate open**
+a bit under the close-speech level and **Gate close** a bit above the
+far-speech level. Settings persist with the rest of the style panel and are
+re-sent to SpeechBridge whenever it (re)connects. This only applies to the
+SpeechBridge path — the Chrome fallback recognizer captures its own mic
+audio internally and can't be gated (the readout stays "not connected").
+
 **Fallback with no Node at all:** `npm run build` produces a plain
 static `dist/` folder. If Node/Vite becomes unavailable on show day, any
 static file server works, e.g. `cd dist && python3 -m http.server 8080`.
