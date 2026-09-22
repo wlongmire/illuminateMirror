@@ -65,6 +65,10 @@ npm run dev
 Open the printed `localhost` URL in **Chrome**, click "Click to start
 listening," and allow microphone access.
 
+On macOS, `npm run dev` first restarts SpeechBridge (building it if it's
+never been built) via [native/SpeechBridge/restart.sh](native/SpeechBridge/restart.sh).
+Run that script directly any time to restart SpeechBridge on its own.
+
 ### Running the show (unattended)
 
 For an actual installation run, build first and serve the static output
@@ -108,7 +112,10 @@ panel (`p`) under **Proximity gate**: the **Level** readout shows what
 SpeechBridge is measuring right now (green while the gate is open). Speak
 normally right at the mic, then from a few feet away, and set **Gate open**
 a bit under the close-speech level and **Gate close** a bit above the
-far-speech level. Settings persist with the rest of the style panel and are
+far-speech level. **Utterance end (pause)** sets how long a pause after
+gated speech ends the utterance (SpeechBridge then forces a final result
+instead of waiting on Apple's own ~1–2s judgment) — shorter splits phrases
+more eagerly. Settings persist with the rest of the style panel and are
 re-sent to SpeechBridge whenever it (re)connects. This only applies to the
 SpeechBridge path — the Chrome fallback recognizer captures its own mic
 audio internally and can't be gated (the readout stays "not connected").

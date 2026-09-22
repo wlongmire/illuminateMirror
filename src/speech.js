@@ -17,7 +17,7 @@ const NATIVE_CONNECT_TIMEOUT_MS = 1000;
 
 function sendNativeGate(gate) {
   if (!gate) return;
-  const url = `${NATIVE_BRIDGE_URL}gate?open=${gate.openDb}&close=${gate.closeDb}`;
+  const url = `${NATIVE_BRIDGE_URL}gate?open=${gate.openDb}&close=${gate.closeDb}&end=${gate.utteranceEndMs}`;
   fetch(url, { mode: 'no-cors' }).catch(() => { /* resent on the next (re)connect */ });
 }
 
@@ -177,10 +177,11 @@ export function createSpeechRecognizer({ onResult, onStateChange, onError, onLev
     supported: true,
     // null until start() has picked one; 'native' (SpeechBridge) or 'browser'.
     get backend() { return backend; },
-    // Proximity gate thresholds — only SpeechBridge can apply them; the
-    // browser recognizer captures its own mic audio internally.
-    setGate(openDb, closeDb) {
-      gate = { openDb, closeDb };
+    // Proximity gate thresholds and the pause that ends an utterance — only
+    // SpeechBridge can apply them; the browser recognizer captures its own
+    // mic audio internally.
+    setGate({ gateOpenDb, gateCloseDb, utteranceEndMs }) {
+      gate = { openDb: gateOpenDb, closeDb: gateCloseDb, utteranceEndMs };
       if (backend === 'native') sendNativeGate(gate);
     },
     start() { begin(); },

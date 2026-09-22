@@ -62,6 +62,8 @@ const styleGateOpenEl = document.getElementById('styleGateOpen');
 const styleGateOpenVal = document.getElementById('styleGateOpenVal');
 const styleGateCloseEl = document.getElementById('styleGateClose');
 const styleGateCloseVal = document.getElementById('styleGateCloseVal');
+const styleUtteranceEndEl = document.getElementById('styleUtteranceEnd');
+const styleUtteranceEndVal = document.getElementById('styleUtteranceEndVal');
 const gateReadoutEl = document.getElementById('gateReadout');
 
 // Mirror clip options aren't hardcoded in index.html — added here from the
@@ -98,8 +100,9 @@ const DEFAULT_STYLE = {
   // floor/ceiling dB range below); corpus notes use a fixed velocity.
   corpusVelocity: 90, micFloorDb: -50, micCeilDb: -12,
   // SpeechBridge proximity gate: audio quieter than this never reaches the
-  // recognizer, so only speech close to the mic gets transcribed.
-  gateOpenDb: -30, gateCloseDb: -40,
+  // recognizer, so only speech close to the mic gets transcribed. A pause
+  // of utteranceEndMs after gated speech ends the utterance.
+  gateOpenDb: -30, gateCloseDb: -40, utteranceEndMs: 800,
 };
 
 function loadStyle() {
@@ -235,6 +238,8 @@ function applyStyleToPanel(style) {
   styleGateOpenVal.textContent = `${style.gateOpenDb}dB`;
   styleGateCloseEl.value = style.gateCloseDb;
   styleGateCloseVal.textContent = `${style.gateCloseDb}dB`;
+  styleUtteranceEndEl.value = style.utteranceEndMs;
+  styleUtteranceEndVal.textContent = `${(style.utteranceEndMs / 1000).toFixed(2)}s`;
 }
 applyStyleToPanel(initialStyle);
 
@@ -265,6 +270,7 @@ function onStyleInput() {
     micCeilDb: Number(styleMicCeilEl.value),
     gateOpenDb: Number(styleGateOpenEl.value),
     gateCloseDb: Number(styleGateCloseEl.value),
+    utteranceEndMs: Number(styleUtteranceEndEl.value),
   };
   styleWeightVal.textContent = style.fontWeight;
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
@@ -289,7 +295,8 @@ function onStyleInput() {
   micCeilDb = style.micCeilDb;
   styleGateOpenVal.textContent = `${style.gateOpenDb}dB`;
   styleGateCloseVal.textContent = `${style.gateCloseDb}dB`;
-  recognizer.setGate(style.gateOpenDb, style.gateCloseDb);
+  styleUtteranceEndVal.textContent = `${(style.utteranceEndMs / 1000).toFixed(2)}s`;
+  recognizer.setGate(style);
   const sourceChanged = style.videoSource !== videoInput.source;
   const deviceChanged = (style.cameraDeviceId || '') !== (videoInput.cameraDeviceId || '');
   videoInput.setSource(style.videoSource);
@@ -330,7 +337,7 @@ function onStyleInput() {
   styleVideoSourceEl, styleCameraDeviceEl, styleVideoInfluenceEl, styleVideoGainEl,
   styleCorpusAlphaEl, styleUserAlphaEl, styleUserWordSizeEl, styleVolumeBoostEl,
   styleCorpusVelocityEl, styleMicFloorEl, styleMicCeilEl,
-  styleGateOpenEl, styleGateCloseEl,
+  styleGateOpenEl, styleGateCloseEl, styleUtteranceEndEl,
 ].forEach((el) => {
   el.addEventListener('input', onStyleInput);
 });
@@ -633,13 +640,12 @@ function flushUserNotes() {
 }
 
 function onPhrase(text, isFinal) {
-  if (isFinal) {
-    flushUserNotes();
-    historyLayer.endUtterance();
-    textLayer.finishUtterance();
-  } else {
-    const volume = micVolume.getNormalized(micFloorDb, micCeilDb);
-    const words = text.trim().split(/\s+/).filter(Boolean);
+  const volume = micVolume.getNormalized(micFloorDb, micCeilDb);
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  // A final result can carry a last word the partials never showed (e.g.
+  // when SpeechBridge force-ends an utterance), so it's diffed like any
+  // partial. An empty final must not wipe the words awaiting flush.
+  if (words.length > 0) {
     let common = 0;
     while (common < spokenWords.length && common < words.length && spokenWords[common] === words[common]) {
       common++;
@@ -650,6 +656,11 @@ function onPhrase(text, isFinal) {
     });
     spokenWords = words;
     textLayer.setPhrase(text, { dim: false, volume });
+  }
+  if (isFinal) {
+    flushUserNotes();
+    historyLayer.endUtterance();
+    textLayer.finishUtterance();
   }
 }
 
@@ -713,7 +724,7 @@ const recognizer = createSpeechRecognizer({
     gateReadoutEl.style.color = gateOpen ? '#6f6' : '';
   },
 });
-recognizer.setGate(initialStyle.gateOpenDb, initialStyle.gateCloseDb);
+recognizer.setGate(initialStyle);
 
 if (!recognizer.supported) {
   startBtn.disabled = true;

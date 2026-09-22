@@ -5,6 +5,7 @@
   "description": "Live speech-to-kaleidoscope-feedback installation display for Illuminate Philly.",
   "type": "module",
   "scripts": {
+    "predev": "./native/SpeechBridge/restart.sh",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 5173"

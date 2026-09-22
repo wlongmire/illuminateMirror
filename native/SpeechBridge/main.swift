@@ -42,14 +42,15 @@ let port: NWEndpoint.Port = 8765
 // MARK: - Server-Sent Events server
 
 // Deliberately minimal: it serves exactly two things to one client (the
-// page) — `GET /gate?open=<dB>&close=<dB>` sets the proximity gate's
-// thresholds, and any other request is treated as "please stream to me"
+// page) — `GET /gate?open=<dB>&close=<dB>[&end=<ms>]` sets the proximity
+// gate's thresholds (and optionally the pause that ends an utterance), and
+// any other request is treated as "please stream to me"
 // (an open SSE stream). Only the request line is looked at.
 final class SSEServer {
   private var listener: NWListener?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
   private let queue = DispatchQueue(label: "speechbridge.sse")
-  var onGate: ((_ openDb: Float, _ closeDb: Float) -> Void)?
+  var onGate: ((_ openDb: Float, _ closeDb: Float, _ utteranceEndMs: Float?) -> Void)?
 
   func start() {
     let params = NWParameters.tcp
@@ -107,7 +108,7 @@ final class SSEServer {
     }
     let ok = value("open") != nil && value("close") != nil
     if let open = value("open"), let close = value("close") {
-      onGate?(open, close)
+      onGate?(open, close, value("end"))
     }
     let status = ok ? "204 No Content" : "400 Bad Request"
     let response = "HTTP/1.1 \(status)\r\n"
@@ -161,6 +162,7 @@ final class SpeechBridge {
   private var task: SFSpeechRecognitionTask?
   private var intentionalStop = false
   private var tapInstalled = false
+  private var taskGeneration = 0
 
   // MARK: Proximity noise gate
   //
@@ -181,25 +183,36 @@ final class SpeechBridge {
   // GET /gate on every connect and every slider change); the values here
   // are only what's used before a page has connected. The measured level
   // streams back to the page (SSE "level" events) so tuning is visual.
+  //
+  // utteranceEndSec: once the gate has been closed this long since the last
+  // loud audio, the current task is told its audio has ended, forcing a
+  // final result and a fresh task. Without it, Apple's recognizer decides
+  // on its own (observed ~1–2s of silence).
   private let gateLock = NSLock()
   private var gateOpenDb: Float = -30
   private var gateCloseDb: Float = -40
+  private var utteranceEndSec: TimeInterval = 0.8
   private let gateReleaseSec: TimeInterval = 0.35
   private let levelBroadcastSec: TimeInterval = 0.1
   private var gateOpen = false
   private var lastLoudAt = Date.distantPast
   private var lastLevelSentAt = Date.distantPast
+  // Per recognition task, reset in start().
+  private var heardSpeechThisTask = false
+  private var endRequested = false
 
   init(server: SSEServer) {
     self.server = server
   }
 
-  func setGate(openDb: Float, closeDb: Float) {
+  func setGate(openDb: Float, closeDb: Float, utteranceEndMs: Float?) {
     gateLock.lock()
     gateOpenDb = openDb
     gateCloseDb = min(closeDb, openDb)
+    if let ms = utteranceEndMs { utteranceEndSec = TimeInterval(max(ms, 0)) / 1000 }
+    let endSec = utteranceEndSec
     gateLock.unlock()
-    log(String(format: "gate thresholds set: open %.0f dB, close %.0f dB", openDb, min(closeDb, openDb)))
+    log(String(format: "gate set: open %.0f dB, close %.0f dB, utterance end %.2fs", openDb, min(closeDb, openDb), endSec))
   }
 
   private func levelDb(of buffer: AVAudioPCMBuffer) -> Float {
@@ -216,6 +229,15 @@ final class SpeechBridge {
     return rms > 0 ? 20 * log10(rms) : -.infinity
   }
 
+  private func silentCopy(of buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+    guard let silent = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return nil }
+    silent.frameLength = buffer.frameLength
+    for audioBuffer in UnsafeMutableAudioBufferListPointer(silent.mutableAudioBufferList) {
+      if let data = audioBuffer.mData { memset(data, 0, Int(audioBuffer.mDataByteSize)) }
+    }
+    return silent
+  }
+
   // Returns whether this buffer should be forwarded to the recognizer.
   private func gateAllows(_ buffer: AVAudioPCMBuffer) -> Bool {
     let db = levelDb(of: buffer)
@@ -227,6 +249,7 @@ final class SpeechBridge {
     let now = Date()
     if db >= openDb {
       gateOpen = true
+      heardSpeechThisTask = true
       lastLoudAt = now
     } else if db < closeDb, gateOpen, now.timeIntervalSince(lastLoudAt) > gateReleaseSec {
       gateOpen = false
@@ -237,6 +260,18 @@ final class SpeechBridge {
       server.broadcastLevel(db: db, gateOpen: gateOpen)
     }
     return gateOpen
+  }
+
+  // True exactly once per task, when a pause after gated speech has lasted
+  // utteranceEndSec.
+  private func shouldEndUtterance() -> Bool {
+    guard heardSpeechThisTask, !gateOpen, !endRequested else { return false }
+    gateLock.lock()
+    let endSec = utteranceEndSec
+    gateLock.unlock()
+    guard Date().timeIntervalSince(lastLoudAt) >= endSec else { return false }
+    endRequested = true
+    return true
   }
 
   func requestPermissions(_ completion: @escaping (Bool, String?) -> Void) {
@@ -277,9 +312,22 @@ final class SpeechBridge {
     if tapInstalled { inputNode.removeTap(onBus: 0) }
     // Smaller buffer = audio reaches the recognizer in finer-grained
     // chunks, shaving a little more off the delay before it can react.
+    heardSpeechThisTask = false
+    endRequested = false
     inputNode.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
-      guard let self = self, self.gateAllows(buffer) else { return }
-      req.append(buffer)
+      guard let self = self, !self.endRequested else { return }
+      if self.shouldEndUtterance() {
+        req.endAudio()
+        return
+      }
+      if self.gateAllows(buffer) {
+        req.append(buffer)
+      } else if let silence = self.silentCopy(of: buffer) {
+        // Silence, not nothing: the recognizer only ends an utterance when
+        // it hears a pause, so dropping gated audio entirely would keep one
+        // task (and its transcript) growing forever.
+        req.append(silence)
+      }
     }
     tapInstalled = true
 
@@ -294,12 +342,18 @@ final class SpeechBridge {
 
     server.broadcastState(listening: true)
 
+    taskGeneration += 1
+    let generation = taskGeneration
     task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-      guard let self = self else { return }
+      // A finished task can still call back (e.g. with a cancellation error
+      // after teardown's cancel()) — acting on that would re-send its final
+      // transcript and schedule a second, overlapping restart.
+      guard let self = self, generation == self.taskGeneration else { return }
       if let result = result {
         self.server.broadcastResult(transcript: result.bestTranscription.formattedString, isFinal: result.isFinal)
       }
       if error != nil || (result?.isFinal ?? false) {
+        self.taskGeneration += 1
         self.teardown()
         if !self.intentionalStop {
           // A clean end-of-utterance restarts almost immediately — any
@@ -338,7 +392,7 @@ let server = SSEServer()
 server.start()
 
 let bridge = SpeechBridge(server: server)
-server.onGate = { open, close in bridge.setGate(openDb: open, closeDb: close) }
+server.onGate = { open, close, end in bridge.setGate(openDb: open, closeDb: close, utteranceEndMs: end) }
 log("requesting microphone + speech recognition permissions...")
 bridge.requestPermissions { granted, message in
   guard granted else {
