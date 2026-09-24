@@ -14,6 +14,8 @@
 	<string>1</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>SpeechBridge transcribes speech on-device for the Illuminate Philly display — audio never leaves this machine.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
