@@ -65,6 +65,7 @@ const styleGateCloseVal = document.getElementById('styleGateCloseVal');
 const styleUtteranceEndEl = document.getElementById('styleUtteranceEnd');
 const styleUtteranceEndVal = document.getElementById('styleUtteranceEndVal');
 const gateReadoutEl = document.getElementById('gateReadout');
+const gateBypassToggleEl = document.getElementById('gateBypassToggle');
 
 // Mirror clip options aren't hardcoded in index.html — added here from the
 // single manifest in videoInput.js so there's one place that knows about them.
@@ -447,6 +448,16 @@ resize();
 // ---- Render loop ----------------------------------------------------------
 let lastT = performance.now();
 let debugOn = false;
+// Testing only, session-only (not persisted): forwards every mic buffer to
+// the recognizer regardless of level, to check what SpeechBridge would
+// transcribe without the proximity gate in the way.
+let gateBypass = false;
+function setGateBypass(enabled) {
+  gateBypass = enabled;
+  gateBypassToggleEl.checked = enabled;
+  recognizer.setGateBypass(enabled);
+}
+gateBypassToggleEl.addEventListener('change', () => setGateBypass(gateBypassToggleEl.checked));
 
 function frame(t) {
   const dtMs = Math.min(100, t - lastT); // clamp to avoid huge jumps on tab-back
@@ -495,6 +506,8 @@ window.addEventListener('keydown', (e) => {
     frameEnabled = !frameEnabled;
     frameOverlayEl.hidden = !frameEnabled;
     resize();
+  } else if (e.key === 'g') {
+    setGateBypass(!gateBypass);
   } else if (/^[1-9]$/.test(e.key)) {
     // Ignore while a form control has focus — a select's own type-ahead,
     // or just typing into a field, should win instead.

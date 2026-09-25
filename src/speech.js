@@ -17,7 +17,7 @@ const NATIVE_CONNECT_TIMEOUT_MS = 1000;
 
 function sendNativeGate(gate) {
   if (!gate) return;
-  const url = `${NATIVE_BRIDGE_URL}gate?open=${gate.openDb}&close=${gate.closeDb}&end=${gate.utteranceEndMs}`;
+  const url = `${NATIVE_BRIDGE_URL}gate?open=${gate.openDb}&close=${gate.closeDb}&end=${gate.utteranceEndMs}&bypass=${gate.bypass ? 1 : 0}`;
   fetch(url, { mode: 'no-cors' }).catch(() => { /* resent on the next (re)connect */ });
 }
 
@@ -179,9 +179,19 @@ export function createSpeechRecognizer({ onResult, onStateChange, onError, onLev
     get backend() { return backend; },
     // Proximity gate thresholds and the pause that ends an utterance — only
     // SpeechBridge can apply them; the browser recognizer captures its own
-    // mic audio internally.
+    // mic audio internally. Preserves the bypass flag (set separately, see
+    // setGateBypass) across style-driven threshold changes.
     setGate({ gateOpenDb, gateCloseDb, utteranceEndMs }) {
-      gate = { openDb: gateOpenDb, closeDb: gateCloseDb, utteranceEndMs };
+      gate = { openDb: gateOpenDb, closeDb: gateCloseDb, utteranceEndMs, bypass: gate?.bypass ?? false };
+      if (backend === 'native') sendNativeGate(gate);
+    },
+    // Testing only: forwards every buffer to the recognizer untouched,
+    // ignoring the gate thresholds entirely (and, since the gate never
+    // closes, forced utterance-ending too — it falls back to Apple's own
+    // pause detection, same as before the gate existed).
+    setGateBypass(enabled) {
+      if (!gate) return;
+      gate = { ...gate, bypass: enabled };
       if (backend === 'native') sendNativeGate(gate);
     },
     start() { begin(); },

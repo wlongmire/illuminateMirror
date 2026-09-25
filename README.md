@@ -115,7 +115,17 @@ a bit under the close-speech level and **Gate close** a bit above the
 far-speech level. **Utterance end (pause)** sets how long a pause after
 gated speech ends the utterance (SpeechBridge then forces a final result
 instead of waiting on Apple's own ~1–2s judgment) — shorter splits phrases
-more eagerly. Settings persist with the rest of the style panel and are
+more eagerly.
+
+**Bypass gate — testing**, at the bottom (checkbox, or press **`g`**),
+bypasses the gate entirely — every buffer reaches the recognizer regardless
+of level, for checking what SpeechBridge would transcribe without the gate
+in the way. It's session-only (not saved),
+always starts off, and reverts to Apple's own pause detection for ending
+utterances while on (the forced-pause logic above uses the gate closing as
+its signal, which never happens while bypassed).
+
+Settings persist with the rest of the style panel and are
 re-sent to SpeechBridge whenever it (re)connects. This only applies to the
 SpeechBridge path — the Chrome fallback recognizer captures its own mic
 audio internally and can't be gated (the readout stays "not connected").

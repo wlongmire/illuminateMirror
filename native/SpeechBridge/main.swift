@@ -42,15 +42,16 @@ let port: NWEndpoint.Port = 8765
 // MARK: - Server-Sent Events server
 
 // Deliberately minimal: it serves exactly two things to one client (the
-// page) — `GET /gate?open=<dB>&close=<dB>[&end=<ms>]` sets the proximity
-// gate's thresholds (and optionally the pause that ends an utterance), and
-// any other request is treated as "please stream to me"
-// (an open SSE stream). Only the request line is looked at.
+// page) — `GET /gate?open=<dB>&close=<dB>[&end=<ms>][&bypass=1]` sets the
+// proximity gate's thresholds (optionally the pause that ends an utterance,
+// and whether the gate is bypassed entirely for testing), and any other
+// request is treated as "please stream to me" (an open SSE stream). Only
+// the request line is looked at.
 final class SSEServer {
   private var listener: NWListener?
   private var connections: [ObjectIdentifier: NWConnection] = [:]
   private let queue = DispatchQueue(label: "speechbridge.sse")
-  var onGate: ((_ openDb: Float, _ closeDb: Float, _ utteranceEndMs: Float?) -> Void)?
+  var onGate: ((_ openDb: Float, _ closeDb: Float, _ utteranceEndMs: Float?, _ bypass: Bool) -> Void)?
 
   func start() {
     let params = NWParameters.tcp
@@ -108,7 +109,8 @@ final class SSEServer {
     }
     let ok = value("open") != nil && value("close") != nil
     if let open = value("open"), let close = value("close") {
-      onGate?(open, close, value("end"))
+      let bypass = url.queryItems?.first { $0.name == "bypass" }?.value == "1"
+      onGate?(open, close, value("end"), bypass)
     }
     let status = ok ? "204 No Content" : "400 Bad Request"
     let response = "HTTP/1.1 \(status)\r\n"
@@ -200,19 +202,31 @@ final class SpeechBridge {
   // Per recognition task, reset in start().
   private var heardSpeechThisTask = false
   private var endRequested = false
+  // Testing only: forwards every buffer untouched (no muting, no forced
+  // utterance-end) so distant/quiet speech can be checked without the gate
+  // in the way. Level/gate-open state keeps updating underneath so the
+  // panel's readout stays live. Not persisted — always starts off.
+  private var gateBypass = false
 
   init(server: SSEServer) {
     self.server = server
   }
 
-  func setGate(openDb: Float, closeDb: Float, utteranceEndMs: Float?) {
+  func setGate(openDb: Float, closeDb: Float, utteranceEndMs: Float?, bypass: Bool) {
     gateLock.lock()
     gateOpenDb = openDb
     gateCloseDb = min(closeDb, openDb)
     if let ms = utteranceEndMs { utteranceEndSec = TimeInterval(max(ms, 0)) / 1000 }
+    gateBypass = bypass
     let endSec = utteranceEndSec
     gateLock.unlock()
-    log(String(format: "gate set: open %.0f dB, close %.0f dB, utterance end %.2fs", openDb, min(closeDb, openDb), endSec))
+    log(String(format: "gate set: open %.0f dB, close %.0f dB, utterance end %.2fs, bypass %@", openDb, min(closeDb, openDb), endSec, bypass ? "on" : "off"))
+  }
+
+  private var isBypassed: Bool {
+    gateLock.lock()
+    defer { gateLock.unlock() }
+    return gateBypass
   }
 
   private func levelDb(of buffer: AVAudioPCMBuffer) -> Float {
@@ -315,12 +329,20 @@ final class SpeechBridge {
     heardSpeechThisTask = false
     endRequested = false
     inputNode.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
-      guard let self = self, !self.endRequested else { return }
+      guard let self = self else { return }
+      // gateAllows always runs first so the level/gate-open readout keeps
+      // updating live even while bypassed.
+      let open = self.gateAllows(buffer)
+      if self.isBypassed {
+        req.append(buffer)
+        return
+      }
+      guard !self.endRequested else { return }
       if self.shouldEndUtterance() {
         req.endAudio()
         return
       }
-      if self.gateAllows(buffer) {
+      if open {
         req.append(buffer)
       } else if let silence = self.silentCopy(of: buffer) {
         // Silence, not nothing: the recognizer only ends an utterance when
@@ -392,7 +414,7 @@ let server = SSEServer()
 server.start()
 
 let bridge = SpeechBridge(server: server)
-server.onGate = { open, close, end in bridge.setGate(openDb: open, closeDb: close, utteranceEndMs: end) }
+server.onGate = { open, close, end, bypass in bridge.setGate(openDb: open, closeDb: close, utteranceEndMs: end, bypass: bypass) }
 log("requesting microphone + speech recognition permissions...")
 bridge.requestPermissions { granted, message in
   guard granted else {
