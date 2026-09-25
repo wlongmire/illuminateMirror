@@ -10,6 +10,13 @@ const USER_TEXT_RGB = '0, 0, 0';
 const CORPUS_BOX_RGB = '0, 0, 0';
 const CORPUS_TEXT_RGB = '255, 255, 255';
 
+// Box geometry, in multiples of the font size. The line pitch is a little
+// taller than the box so stacked rounded boxes don't touch.
+const LINE_HEIGHT_EM = 1.4;
+const BOX_HEIGHT_EM = 1.3;
+const BOX_PAD_X_EM = 0.2;
+const BOX_RADIUS_EM = 0.14;
+
 function wrapText(ctx, text, maxWidth) {
   const words = text.split(/\s+/).filter(Boolean);
   const lines = [];
@@ -39,14 +46,14 @@ function computeLayout(ctx, text, canvasW, canvasH, fontFamily, fontWeight, size
   while (fontSize > minFontSize) {
     ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
     lines = wrapText(ctx, text, maxWidth);
-    const lineHeight = fontSize * 1.15;
+    const lineHeight = fontSize * LINE_HEIGHT_EM;
     const blockHeight = lines.length * lineHeight;
     const widest = Math.max(...lines.map((l) => ctx.measureText(l).width));
     if (blockHeight <= maxHeight && widest <= maxWidth) break;
     fontSize -= 4;
   }
 
-  return { fontSize, lines, lineHeight: fontSize * 1.15 };
+  return { fontSize, lines, lineHeight: fontSize * LINE_HEIGHT_EM };
 }
 
 // Ellipse mode: the phrase is a centered block of lines, each wrapped to
@@ -71,7 +78,7 @@ function computeEllipseLayout(ctx, text, canvasW, canvasH, fontFamily, fontWeigh
 
   for (;;) {
     ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
-    const lineHeight = fontSize * 1.15;
+    const lineHeight = fontSize * LINE_HEIGHT_EM;
     const maxLines = Math.max(1, Math.floor((canvasH * 0.7) / lineHeight));
     for (let n = 1; n <= maxLines; n++) {
       const lines = [];
@@ -342,21 +349,32 @@ export class TextLayer {
 
     ctx.font = `${this.fontWeight} ${fontSize}px ${this.fontFamily}`;
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    ctx.textBaseline = 'alphabetic';
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${this.letterSpacing}px`;
 
     // Each line sits on a filled box (see the color constants above).
     const [boxRgb, textRgb] = this.dim ? [CORPUS_BOX_RGB, CORPUS_TEXT_RGB] : [USER_BOX_RGB, USER_TEXT_RGB];
-    const padX = fontSize * 0.25;
+    const padX = fontSize * BOX_PAD_X_EM;
+    const boxH = fontSize * BOX_HEIGHT_EM;
+    const radius = Math.min(fontSize * BOX_RADIUS_EM, boxH / 2);
     const totalHeight = lines.length * lineHeight;
     const startY = cy - totalHeight / 2 + lineHeight / 2;
     lines.forEach((line, i) => {
+      // y is the vertical center of this line's box.
       const y = lineYs ? lineYs[i] : startY + i * lineHeight;
       const w = ctx.measureText(line).width + padX * 2;
       ctx.fillStyle = `rgba(${boxRgb}, ${this.alpha})`;
-      ctx.fillRect(cx - w / 2, y - lineHeight / 2, w, lineHeight);
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(cx - w / 2, y - boxH / 2, w, boxH, Math.min(radius, w / 2));
+      else ctx.rect(cx - w / 2, y - boxH / 2, w, boxH);
+      ctx.fill();
+      // Center this line's actual ink (top of its tallest ascender to the
+      // bottom of its deepest descender) in the box. The font's own baselines
+      // can't do this: blackletter ascenders/descenders are lopsided, so lines
+      // with and without descenders would each sit off-center in a fixed one.
+      const m = ctx.measureText(line);
       ctx.fillStyle = `rgba(${textRgb}, ${this.alpha})`;
-      ctx.fillText(line, cx, y);
+      ctx.fillText(line, cx, y + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2);
     });
     ctx.restore();
   }
