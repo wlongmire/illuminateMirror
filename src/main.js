@@ -362,6 +362,21 @@ function onStyleInput() {
 // (unlike ovalEnabled itself, or the 'd'/'p' toggles) since dialing this in
 // is real physical setup work for a specific room/projector; reset with
 // Backspace/Delete.
+// Outline: a thin, crisp, pale low-saturation blue ring that, as the overall mic
+// level rises (all sound in the room, not just speech past the proximity
+// gate), gets more saturated and thicker, then eases back down. Widths are in px. The level uses the mic
+// ceiling shared with MIDI velocity, but starts RING_FLOOR_OFFSET_DB above the
+// shared mic floor, so room noise below that leaves the ring untouched and
+// only real sound moves it.
+const RING_HUE = 205;
+const RING_REST = { sat: 30, light: 82, width: 3 };
+const RING_LOUD = { sat: 100, light: 58, width: 9 };
+const RING_FLOOR_OFFSET_DB = 10;
+const RING_ATTACK_MS = 60;
+const RING_RELEASE_MS = 500;
+let ringLevel = 0;
+
+
 const OVAL_FILL = 0.92; // fraction of the best-fit box the oval occupies at scale 1
 let ovalEnabled = false;
 
@@ -453,6 +468,13 @@ function frame(t) {
 
   textLayer.update(dtMs);
   historyLayer.update(dtMs);
+  if (ovalEnabled) {
+    const target = micVolume.getNormalized(Math.min(micFloorDb + RING_FLOOR_OFFSET_DB, micCeilDb - 3), micCeilDb);
+    ringLevel += (target - ringLevel) * (1 - Math.exp(-dtMs / (target > ringLevel ? RING_ATTACK_MS : RING_RELEASE_MS)));
+    const lerp = (rest, loud) => rest + (loud - rest) * ringLevel;
+    ovalRingEl.style.setProperty('--ring-color', `hsl(${RING_HUE} ${lerp(RING_REST.sat, RING_LOUD.sat).toFixed(1)}% ${lerp(RING_REST.light, RING_LOUD.light).toFixed(1)}%)`);
+    ovalRingEl.style.setProperty('--ring-spread', `${lerp(RING_REST.width, RING_LOUD.width).toFixed(2)}px`);
+  }
   if (renderer) {
     try {
       renderer.render({

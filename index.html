@@ -31,7 +31,8 @@
      box-shadow so it sits just outside the crop instead of eating into it. */
   #ovalRing {
     position: fixed; pointer-events: none; z-index: 4;
-    border-radius: 50%; box-shadow: 0 0 0 3px #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 var(--ring-spread, 3px) var(--ring-color, #fff);
   }
 
   #status {
