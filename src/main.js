@@ -362,20 +362,63 @@ function onStyleInput() {
 // (unlike ovalEnabled itself, or the 'd'/'p' toggles) since dialing this in
 // is real physical setup work for a specific room/projector; reset with
 // Backspace/Delete.
-// Outline: a thin, crisp, pale low-saturation blue ring that, as the overall mic
-// level rises (all sound in the room, not just speech past the proximity
-// gate), gets more saturated and thicker, then eases back down. Widths are in px. The level uses the mic
+// Outline: a thin, crisp ring that, as the overall mic level rises (all sound
+// in the room, not just speech past the proximity gate), gets more saturated
+// and thicker, then eases back down. Widths are in px. The level uses the mic
 // ceiling shared with MIDI velocity, but starts RING_FLOOR_OFFSET_DB above the
 // shared mic floor, so room noise below that leaves the ring untouched and
 // only real sound moves it.
-const RING_HUE = 205;
-const RING_REST = { sat: 30, light: 82, width: 3 };
+//
+// Its resting color is the average color of the background video (whichever
+// source is playing — a mirror clip or the camera), or white when there's no
+// video. When loud it heads to a vivid, saturated version of that same hue.
+const RING_REST = { width: 3 };
 const RING_LOUD = { sat: 100, light: 58, width: 9 };
+const RING_FALLBACK_HUE = 205; // hue to saturate toward when the base color is white/gray
+const RING_MIN_LIGHT = 55;     // a dark video's average is lifted to this, or the ring would vanish on black
+const RING_GRAY_SAT = 6;       // below this saturation the base has no meaningful hue
+const RING_COLOR_TAU_MS = 700; // how slowly the base color follows the video
+const RING_SAMPLE_MS = 120;
 const RING_FLOOR_OFFSET_DB = 10;
 const RING_ATTACK_MS = 60;
 const RING_RELEASE_MS = 500;
 let ringLevel = 0;
 
+const ringColor = { r: 255, g: 255, b: 255 }; // smoothed base color (starts white)
+let ringTarget = { r: 255, g: 255, b: 255 };  // what it's easing toward: the video average, or white
+let ringLastSampleT = 0;
+const ringSampleCtx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+ringSampleCtx.canvas.width = 16;
+ringSampleCtx.canvas.height = 9;
+
+function sampleRingTarget(now) {
+  if (now - ringLastSampleT < RING_SAMPLE_MS) return;
+  ringLastSampleT = now;
+  if (!videoInput.ready) {
+    ringTarget = { r: 255, g: 255, b: 255 };
+    return;
+  }
+  ringSampleCtx.drawImage(videoInput.video, 0, 0, 16, 9);
+  const px = ringSampleCtx.getImageData(0, 0, 16, 9).data;
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < px.length; i += 4) { r += px[i]; g += px[i + 1]; b += px[i + 2]; }
+  const n = px.length / 4;
+  ringTarget = { r: r / n, g: g / n, b: b / n };
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l: l * 100 };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return { h: h * 60, s: s * 100, l: l * 100 };
+}
 
 const OVAL_FILL = 0.92; // fraction of the best-fit box the oval occupies at scale 1
 let ovalEnabled = false;
@@ -471,9 +514,19 @@ function frame(t) {
   if (ovalEnabled) {
     const target = micVolume.getNormalized(Math.min(micFloorDb + RING_FLOOR_OFFSET_DB, micCeilDb - 3), micCeilDb);
     ringLevel += (target - ringLevel) * (1 - Math.exp(-dtMs / (target > ringLevel ? RING_ATTACK_MS : RING_RELEASE_MS)));
-    const lerp = (rest, loud) => rest + (loud - rest) * ringLevel;
-    ovalRingEl.style.setProperty('--ring-color', `hsl(${RING_HUE} ${lerp(RING_REST.sat, RING_LOUD.sat).toFixed(1)}% ${lerp(RING_REST.light, RING_LOUD.light).toFixed(1)}%)`);
-    ovalRingEl.style.setProperty('--ring-spread', `${lerp(RING_REST.width, RING_LOUD.width).toFixed(2)}px`);
+    sampleRingTarget(t);
+    const follow = 1 - Math.exp(-dtMs / RING_COLOR_TAU_MS);
+    ringColor.r += (ringTarget.r - ringColor.r) * follow;
+    ringColor.g += (ringTarget.g - ringColor.g) * follow;
+    ringColor.b += (ringTarget.b - ringColor.b) * follow;
+    const base = rgbToHsl(ringColor.r, ringColor.g, ringColor.b);
+    const hue = base.s < RING_GRAY_SAT ? RING_FALLBACK_HUE : base.h;
+    const baseLight = Math.max(base.l, RING_MIN_LIGHT);
+    const sat = base.s + (RING_LOUD.sat - base.s) * ringLevel;
+    const light = baseLight + (RING_LOUD.light - baseLight) * ringLevel;
+    ovalRingEl.style.setProperty('--ring-color', `hsl(${hue.toFixed(1)} ${sat.toFixed(1)}% ${light.toFixed(1)}%)`);
+    const width = RING_REST.width + (RING_LOUD.width - RING_REST.width) * ringLevel;
+    ovalRingEl.style.setProperty('--ring-spread', `${width.toFixed(2)}px`);
   }
   if (renderer) {
     try {
