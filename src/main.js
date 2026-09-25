@@ -9,7 +9,7 @@ import { MicVolumeMeter } from './micVolume.js';
 
 // ---- DOM --------------------------------------------------------------
 const glCanvas = document.getElementById('gl');
-const frameOverlayEl = document.getElementById('frameOverlay');
+const ovalRingEl = document.getElementById('ovalRing');
 const dotEl = document.getElementById('dot');
 const startOverlay = document.getElementById('start');
 const startBtn = document.getElementById('startBtn');
@@ -344,94 +344,68 @@ function onStyleInput() {
 });
 
 // ---- Resize -------------------------------------------------------------
-// Frame overlay: a decorative picture-frame image (public/images/frame.png)
-// that can be toggled on to letterbox the whole piece inside its inner
-// window. FRAME_WINDOW is that window's box as a fraction of the frame
-// image's own 1366x768 canvas — measured directly off the PNG's alpha
-// channel (where the hand-drawn inner border sits), with a small inward
-// margin so content sits just inside the line rather than touching it.
-const FRAME_ASPECT = 1366 / 768;
-const FRAME_WINDOW = { left: 0.332, top: 0.190, width: 0.304, height: 0.655 };
-let frameEnabled = false;
+// Oval crop: when on, the canvas (text + history layers, i.e. the whole
+// piece) is cropped to an ellipse instead of filling the viewport. The oval
+// is sized to fit the viewport at ovalAspect (width / height; < 1 is tall,
+// > 1 is wide), then scaled/nudged from there. Persisted across reloads
+// (unlike ovalEnabled itself, or the 'd'/'p' toggles) since dialing this in
+// is real physical setup work for a specific room/projector; reset with
+// Backspace/Delete.
+const OVAL_FILL = 0.92; // fraction of the best-fit box the oval occupies at scale 1
+let ovalEnabled = false;
 
-// Fine-tune nudge/scale for the whole framed composition (frame image +
-// canvas together, so they stay in registration — arrow keys and +/-,
-// frame mode only) and, separately, for just the canvas (text/history
-// layers) relative to the frame image (shift+arrows/shift+plus-minus) —
-// for aligning content inside the frame's window independently of the
-// frame's own position/size. Persisted across reloads (unlike frameEnabled
-// itself, or the 'd'/'p' toggles) since dialing these in is real physical
-// setup work for a specific room/projector that shouldn't be lost on a
-// refresh; reset with Backspace/Delete.
-const FRAME_ADJUST_STORAGE_KEY = 'illuminate:frameAdjust';
-const DEFAULT_FRAME_ADJUST = {
-  frameOffsetX: 0, frameOffsetY: 0, frameScale: 1,
-  contentOffsetX: 0, contentOffsetY: 0, contentScale: 1,
-};
+const OVAL_STORAGE_KEY = 'illuminate:oval';
+const DEFAULT_OVAL = { ovalOffsetX: 0, ovalOffsetY: 0, ovalScale: 1, ovalAspect: 0.62 };
 
-function loadFrameAdjust() {
+function loadOval() {
   try {
-    const saved = JSON.parse(localStorage.getItem(FRAME_ADJUST_STORAGE_KEY));
-    return { ...DEFAULT_FRAME_ADJUST, ...saved };
+    const saved = JSON.parse(localStorage.getItem(OVAL_STORAGE_KEY));
+    return { ...DEFAULT_OVAL, ...saved };
   } catch (e) {
-    return { ...DEFAULT_FRAME_ADJUST };
+    return { ...DEFAULT_OVAL };
   }
 }
 
-function saveFrameAdjust() {
+function saveOval() {
   try {
-    localStorage.setItem(FRAME_ADJUST_STORAGE_KEY, JSON.stringify({
-      frameOffsetX, frameOffsetY, frameScale, contentOffsetX, contentOffsetY, contentScale,
-    }));
+    localStorage.setItem(OVAL_STORAGE_KEY, JSON.stringify({ ovalOffsetX, ovalOffsetY, ovalScale, ovalAspect }));
   } catch (e) { /* storage unavailable */ }
 }
 
-const initialFrameAdjust = loadFrameAdjust();
-let { frameOffsetX, frameOffsetY, frameScale, contentOffsetX, contentOffsetY, contentScale } = initialFrameAdjust;
+let { ovalOffsetX, ovalOffsetY, ovalScale, ovalAspect } = loadOval();
 
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
   let boxW = window.innerWidth;
   let boxH = window.innerHeight;
 
-  if (frameEnabled) {
-    // Largest frame-image-shaped box that fits the viewport (same math as
-    // CSS object-fit: contain), centered — the piece then only occupies
-    // the window cut into that box, same fraction regardless of size.
-    // frameScale then scales that best-fit box up or down from center,
-    // before the offset shifts it — so scaling and nudging compose the
-    // way you'd expect regardless of which was adjusted more recently.
-    const viewportAspect = window.innerWidth / window.innerHeight;
-    const stageW = (viewportAspect > FRAME_ASPECT ? window.innerHeight * FRAME_ASPECT : window.innerWidth) * frameScale;
-    const stageH = (viewportAspect > FRAME_ASPECT ? window.innerHeight : window.innerWidth / FRAME_ASPECT) * frameScale;
-    const stageLeft = (window.innerWidth - stageW) / 2 + frameOffsetX;
-    const stageTop = (window.innerHeight - stageH) / 2 + frameOffsetY;
-
-    frameOverlayEl.style.left = `${stageLeft}px`;
-    frameOverlayEl.style.top = `${stageTop}px`;
-    frameOverlayEl.style.width = `${stageW}px`;
-    frameOverlayEl.style.height = `${stageH}px`;
-
-    // contentScale scales the canvas from the center of the window (same
-    // pattern as frameScale on the stage), so it grows/shrinks in place
-    // before contentOffset shifts it.
-    const windowW = FRAME_WINDOW.width * stageW;
-    const windowH = FRAME_WINDOW.height * stageH;
-    boxW = windowW * contentScale;
-    boxH = windowH * contentScale;
-    const windowLeft = stageLeft + FRAME_WINDOW.left * stageW;
-    const windowTop = stageTop + FRAME_WINDOW.top * stageH;
-    glCanvas.style.left = `${windowLeft - (boxW - windowW) / 2 + contentOffsetX}px`;
-    glCanvas.style.top = `${windowTop - (boxH - windowH) / 2 + contentOffsetY}px`;
+  if (ovalEnabled) {
+    // Largest box of the oval's aspect that fits the viewport, shrunk a
+    // little, then scaled from its center before the offset shifts it — so
+    // scaling and nudging compose the same way regardless of order.
+    const fit = Math.min(window.innerHeight, window.innerWidth / ovalAspect) * OVAL_FILL * ovalScale;
+    boxH = fit;
+    boxW = fit * ovalAspect;
+    const left = (window.innerWidth - boxW) / 2 + ovalOffsetX;
+    const top = (window.innerHeight - boxH) / 2 + ovalOffsetY;
+    glCanvas.style.left = `${left}px`;
+    glCanvas.style.top = `${top}px`;
     glCanvas.style.right = 'auto';
     glCanvas.style.bottom = 'auto';
+    glCanvas.style.borderRadius = '50%';
+    ovalRingEl.style.left = `${left}px`;
+    ovalRingEl.style.top = `${top}px`;
+    ovalRingEl.style.width = `${boxW}px`;
+    ovalRingEl.style.height = `${boxH}px`;
+    ovalRingEl.hidden = false;
   } else {
-    // Falls back to the plain inset:0 rule in index.html — full viewport,
-    // exactly the pre-frame-feature behavior.
+    // Falls back to the plain inset:0 rule in index.html — full viewport.
     glCanvas.style.left = '';
     glCanvas.style.top = '';
     glCanvas.style.right = '';
     glCanvas.style.bottom = '';
+    glCanvas.style.borderRadius = '';
+    ovalRingEl.hidden = true;
   }
 
   const w = Math.round(boxW * dpr);
@@ -488,8 +462,7 @@ function frame(t) {
       `src ${videoInput.source}  cam ${cam}  ready ${videoInput.ready}  ${videoInput.video.videoWidth}x${videoInput.video.videoHeight}\n` +
       `influence ${videoInfluence.toFixed(2)}  gain ${videoGain.toFixed(1)}  shading ${shading}\n` +
       `midi ${midi} (${midiOutput.portName ?? 'no port'})  mic ${mic}  level ${micVolume.db.toFixed(1)}dB  vel ${micVolume.getVelocity(micFloorDb, micCeilDb)}\n` +
-      `frame ${frameEnabled ? 'on' : 'off'} (f to toggle)  offset ${frameOffsetX}, ${frameOffsetY} (arrows)  scale ${Math.round(frameScale * 100)}% (+/-)\n` +
-      `content offset ${contentOffsetX}, ${contentOffsetY} (shift+arrows)  scale ${Math.round(contentScale * 100)}% (shift +/-)  [backspace to reset all]`;
+      `oval ${ovalEnabled ? 'on' : 'off'} (f to toggle)  offset ${ovalOffsetX}, ${ovalOffsetY} (arrows)  scale ${Math.round(ovalScale * 100)}% (+/-)  aspect ${ovalAspect.toFixed(2)} w/h (shift +/-)  [backspace to reset]`;
   }
 
   requestAnimationFrame(frame);
@@ -503,8 +476,7 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'p') {
     stylePanel.hidden = !stylePanel.hidden;
   } else if (e.key === 'f') {
-    frameEnabled = !frameEnabled;
-    frameOverlayEl.hidden = !frameEnabled;
+    ovalEnabled = !ovalEnabled;
     resize();
   } else if (e.key === 'g') {
     setGateBypass(!gateBypass);
@@ -519,57 +491,42 @@ window.addEventListener('keydown', (e) => {
       styleVideoSourceEl.value = VIDEO_SOURCE_ORDER[idx];
       styleVideoSourceEl.dispatchEvent(new Event('input', { bubbles: true }));
     }
-  } else if (frameEnabled && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-    // Fine position nudge — only live while the frame is actually showing,
-    // so plain arrow keys are free to do nothing (or whatever a focused
-    // control wants) otherwise. Shift moves just the canvas (text/history
-    // layers) relative to the frame image instead of the whole composition.
+  } else if (ovalEnabled && (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    // Fine position nudge — only live while the oval is showing, so plain
+    // arrow keys stay free otherwise.
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 
     const step = 1;
-    const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
-    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-    if (e.shiftKey) {
-      contentOffsetX += dx;
-      contentOffsetY += dy;
-    } else {
-      frameOffsetX += dx;
-      frameOffsetY += dy;
-    }
+    ovalOffsetX += e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    ovalOffsetY += e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
     resize();
-    saveFrameAdjust();
+    saveOval();
     e.preventDefault();
-  } else if (frameEnabled && (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_')) {
-    // Fine scale nudge — '=' is included alongside '+' since that's the
-    // unshifted key that types '+' on a standard layout, and likewise '_'
-    // alongside '-'. Shift here picks the target the same way it does for
-    // the arrow keys above: content (canvas) instead of the whole frame.
-    // Checked via e.shiftKey rather than e.key so it still works if '+'
-    // itself doesn't require shift on a given keyboard (e.g. numpad).
+  } else if (ovalEnabled && (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_')) {
+    // '=' is included alongside '+' since that's the unshifted key that
+    // types '+' on a standard layout, likewise '_' alongside '-'. Shift
+    // (checked via e.shiftKey, so numpad '+' works too) changes the oval's
+    // shape (width relative to height) instead of its size.
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 
-    const scaleStep = 0.02;
     const grow = e.key === '+' || e.key === '=';
-    const delta = grow ? scaleStep : -scaleStep;
     if (e.shiftKey) {
-      contentScale = Math.max(0.1, Math.min(5, contentScale + delta));
+      ovalAspect = Math.max(0.2, Math.min(5, ovalAspect + (grow ? 0.02 : -0.02)));
     } else {
-      frameScale = Math.max(0.1, Math.min(5, frameScale + delta));
+      ovalScale = Math.max(0.1, Math.min(5, ovalScale + (grow ? 0.02 : -0.02)));
     }
     resize();
-    saveFrameAdjust();
+    saveOval();
     e.preventDefault();
-  } else if (frameEnabled && (e.key === 'Backspace' || e.key === 'Delete')) {
-    frameOffsetX = 0;
-    frameOffsetY = 0;
-    frameScale = 1;
-    contentOffsetX = 0;
-    contentOffsetY = 0;
-    contentScale = 1;
+  } else if (ovalEnabled && (e.key === 'Backspace' || e.key === 'Delete')) {
+    ovalOffsetX = DEFAULT_OVAL.ovalOffsetX;
+    ovalOffsetY = DEFAULT_OVAL.ovalOffsetY;
+    ovalScale = DEFAULT_OVAL.ovalScale;
+    ovalAspect = DEFAULT_OVAL.ovalAspect;
     resize();
-    saveFrameAdjust();
+    saveOval();
   }
 });
 
