@@ -34,6 +34,13 @@
     border-radius: 50%;
     box-shadow: 0 0 0 var(--ring-spread, 3px) var(--ring-color, #fff);
   }
+  /* Faint echoes of the ring, jumped to random offsets by main.js as the sound
+     gets louder; fully transparent at rest. Same box as #ovalRing. */
+  .ovalGhost {
+    position: fixed; pointer-events: none; z-index: 4;
+    border-radius: 50%; opacity: 0;
+    box-shadow: 0 0 0 var(--ghost-width, 2px) var(--ring-color, #fff);
+  }
 
   #status {
     position: fixed; top: 20px; right: 24px;
@@ -108,6 +115,8 @@
 <body>
   <canvas id="gl"></canvas>
   <div id="ovalRing" hidden></div>
+  <div class="ovalGhost" hidden></div>
+  <div class="ovalGhost" hidden></div>
   <div id="status"><span id="dot"></span></div>
   <div id="start"><button id="startBtn">Click to start listening</button></div>
   <div id="debug" hidden></div>

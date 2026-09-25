@@ -10,6 +10,7 @@ import { MicVolumeMeter } from './micVolume.js';
 // ---- DOM --------------------------------------------------------------
 const glCanvas = document.getElementById('gl');
 const ovalRingEl = document.getElementById('ovalRing');
+const ovalGhostEls = [...document.querySelectorAll('.ovalGhost')];
 const dotEl = document.getElementById('dot');
 const startOverlay = document.getElementById('start');
 const startBtn = document.getElementById('startBtn');
@@ -384,6 +385,20 @@ const RING_ATTACK_MS = 60;
 const RING_RELEASE_MS = 500;
 let ringLevel = 0;
 
+// Ghost rings: fainter, thinner copies of the outline, each jumping to its own
+// new random offset every few tenths of a second (a fresh random direction,
+// eased into), further off-center and more visible the louder it gets, and
+// invisible at rest. Each ghost has its own reach and peak opacity, so the
+// second sits farther out and fainter than the first (one entry per element
+// in the page).
+const GHOSTS = [
+  { maxOffsetPx: 26, maxAlpha: 0.55 },
+  { maxOffsetPx: 42, maxAlpha: 0.38 },
+].map((g, i) => ({ ...g, el: ovalGhostEls[i], dirX: 0, dirY: 0, nextJumpT: 0, x: 0, y: 0 }));
+const GHOST_WIDTH_PX = 2;
+const GHOST_JUMP_MIN_MS = 70;
+const GHOST_JUMP_MAX_MS = 210;
+const GHOST_FOLLOW_MS = 60;
 const ringColor = { r: 255, g: 255, b: 255 }; // smoothed base color (starts white)
 let ringTarget = { r: 255, g: 255, b: 255 };  // what it's easing toward: the video average, or white
 let ringLastSampleT = 0;
@@ -467,6 +482,13 @@ function resize() {
     ovalRingEl.style.width = `${boxW}px`;
     ovalRingEl.style.height = `${boxH}px`;
     ovalRingEl.hidden = false;
+    for (const ghost of GHOSTS) {
+      ghost.el.style.left = `${left}px`;
+      ghost.el.style.top = `${top}px`;
+      ghost.el.style.width = `${boxW}px`;
+      ghost.el.style.height = `${boxH}px`;
+      ghost.el.hidden = false;
+    }
   } else {
     // Falls back to the plain inset:0 rule in index.html — full viewport.
     glCanvas.style.left = '';
@@ -475,6 +497,7 @@ function resize() {
     glCanvas.style.bottom = '';
     glCanvas.style.borderRadius = '';
     ovalRingEl.hidden = true;
+    for (const ghost of GHOSTS) ghost.el.hidden = true;
   }
 
   const w = Math.round(boxW * dpr);
@@ -527,6 +550,24 @@ function frame(t) {
     ovalRingEl.style.setProperty('--ring-color', `hsl(${hue.toFixed(1)} ${sat.toFixed(1)}% ${light.toFixed(1)}%)`);
     const width = RING_REST.width + (RING_LOUD.width - RING_REST.width) * ringLevel;
     ovalRingEl.style.setProperty('--ring-spread', `${width.toFixed(2)}px`);
+
+    const ghostFollow = 1 - Math.exp(-dtMs / GHOST_FOLLOW_MS);
+    const ringColorValue = ovalRingEl.style.getPropertyValue('--ring-color');
+    for (const ghost of GHOSTS) {
+      if (t >= ghost.nextJumpT) {
+        const angle = Math.random() * Math.PI * 2;
+        const reach = 0.4 + Math.random() * 0.6;
+        ghost.dirX = Math.cos(angle) * reach;
+        ghost.dirY = Math.sin(angle) * reach;
+        ghost.nextJumpT = t + GHOST_JUMP_MIN_MS + Math.random() * (GHOST_JUMP_MAX_MS - GHOST_JUMP_MIN_MS);
+      }
+      ghost.x += (ghost.dirX * ghost.maxOffsetPx * ringLevel - ghost.x) * ghostFollow;
+      ghost.y += (ghost.dirY * ghost.maxOffsetPx * ringLevel - ghost.y) * ghostFollow;
+      ghost.el.style.transform = `translate(${ghost.x.toFixed(2)}px, ${ghost.y.toFixed(2)}px)`;
+      ghost.el.style.opacity = (ghost.maxAlpha * ringLevel).toFixed(3);
+      ghost.el.style.setProperty('--ring-color', ringColorValue);
+      ghost.el.style.setProperty('--ghost-width', `${GHOST_WIDTH_PX}px`);
+    }
   }
   if (renderer) {
     try {
