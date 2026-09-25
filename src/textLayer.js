@@ -41,6 +41,56 @@ function computeLayout(ctx, text, canvasW, canvasH, fontFamily, fontWeight, size
   return { fontSize, lines, lineHeight: fontSize * 1.15 };
 }
 
+// Ellipse mode: the phrase is a centered block of lines, each wrapped to
+// the ellipse's width at that line's own height (narrower toward the top
+// and bottom). The row positions depend on how many lines there are, so
+// this tries 1, 2, 3... lines until the words fit, shrinking the font if
+// none do. Falls back to the plain rectangular layout for text too long to
+// fit at the minimum size.
+const ELLIPSE_INSET = 0.9;
+
+function computeEllipseLayout(ctx, text, canvasW, canvasH, fontFamily, fontWeight, sizeScale) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const halfW = (canvasW / 2) * ELLIPSE_INSET;
+  const halfH = (canvasH / 2) * ELLIPSE_INSET;
+  const cy = canvasH / 2;
+  const minFontSize = 24 * sizeScale;
+  let fontSize = Math.min(canvasW, canvasH) * 0.16 * sizeScale;
+  const chord = (y0, y1) => {
+    const dy = Math.max(Math.abs(y0 - cy), Math.abs(y1 - cy));
+    return dy >= halfH ? 0 : 2 * halfW * Math.sqrt(1 - (dy / halfH) ** 2);
+  };
+
+  for (;;) {
+    ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    const lineHeight = fontSize * 1.15;
+    const maxLines = Math.max(1, Math.floor((canvasH * 0.7) / lineHeight));
+    for (let n = 1; n <= maxLines; n++) {
+      const lines = [];
+      const lineYs = [];
+      let i = 0;
+      for (let k = 0; k < n && i < words.length; k++) {
+        const y0 = cy - (n * lineHeight) / 2 + k * lineHeight;
+        const avail = chord(y0, y0 + lineHeight);
+        let line = '';
+        while (i < words.length) {
+          const test = line ? line + ' ' + words[i] : words[i];
+          if (ctx.measureText(test).width > avail) break;
+          line = test;
+          i++;
+        }
+        if (!line) break;
+        lines.push(line);
+        lineYs.push(y0 + lineHeight / 2);
+      }
+      if (i >= words.length) return { fontSize, lines, lineYs, lineHeight };
+    }
+    if (fontSize <= minFontSize) break;
+    fontSize = Math.max(minFontSize, fontSize - 4);
+  }
+  return computeLayout(ctx, text, canvasW, canvasH, fontFamily, fontWeight, sizeScale);
+}
+
 export class TextLayer {
   constructor({
     fontFamily = 'system-ui, sans-serif', fontWeight = 700, sizeScale = 1, letterSpacing = 0,
@@ -56,6 +106,7 @@ export class TextLayer {
     this.currentText = '';
     this.pendingText = null;
     this.layout = null;
+    this.shape = 'rect'; // 'rect' | 'ellipse' — see computeEllipseLayout
     this.alpha = 0;
     this.scale = 1;
     this.blur = 0;
@@ -100,6 +151,12 @@ export class TextLayer {
   resize(w, h) {
     this.canvas.width = Math.max(1, w);
     this.canvas.height = Math.max(1, h);
+    this.layout = null;
+  }
+
+  setShape(shape) {
+    if (shape === this.shape) return;
+    this.shape = shape;
     this.layout = null;
   }
 
@@ -255,12 +312,13 @@ export class TextLayer {
       const effectiveSizeScale = this.dim
         ? this.sizeScale * this.dimSizeScale
         : this.sizeScale * this.userSizeScale * (1 + this.volume * this.userVolumeBoost);
-      this.layout = computeLayout(
+      const compute = this.shape === 'ellipse' ? computeEllipseLayout : computeLayout;
+      this.layout = compute(
         ctx, this.currentText, canvas.width, canvas.height,
         this.fontFamily, this.fontWeight, effectiveSizeScale
       );
     }
-    const { fontSize, lines, lineHeight } = this.layout;
+    const { fontSize, lines, lineHeight, lineYs } = this.layout;
 
     ctx.save();
     const cx = canvas.width / 2;
@@ -281,7 +339,7 @@ export class TextLayer {
     const totalHeight = lines.length * lineHeight;
     const startY = cy - totalHeight / 2 + lineHeight / 2;
     lines.forEach((line, i) => {
-      ctx.fillText(line, cx, startY + i * lineHeight);
+      ctx.fillText(line, cx, lineYs ? lineYs[i] : startY + i * lineHeight);
     });
     ctx.restore();
   }

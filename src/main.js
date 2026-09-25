@@ -412,6 +412,9 @@ function resize() {
   const h = Math.round(boxH * dpr);
   glCanvas.style.width = boxW + 'px';
   glCanvas.style.height = boxH + 'px';
+  const shape = ovalEnabled ? 'ellipse' : 'rect';
+  textLayer.setShape(shape);
+  historyLayer.setShape(shape);
   textLayer.resize(w, h);
   historyLayer.resize(w, h);
   if (renderer) renderer.resize(w, h);
