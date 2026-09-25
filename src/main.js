@@ -381,6 +381,13 @@ const RING_GRAY_SAT = 6;       // below this saturation the base has no meaningf
 const RING_COLOR_TAU_MS = 700; // how slowly the base color follows the video
 const RING_SAMPLE_MS = 120;
 const RING_FLOOR_OFFSET_DB = 10;
+// The effect is scaled by who's currently "speaking" on the display: while a
+// user utterance is in progress it never drops below RING_USER_BASELINE (so
+// the ring is visibly alive during speech even if the room is quiet), and
+// while the corpus monologue is running it's scaled down by
+// RING_CORPUS_GAIN so the piece's own output stirs it less.
+const RING_USER_BASELINE = 0.25;
+const RING_CORPUS_GAIN = 0.65;
 const RING_ATTACK_MS = 60;
 const RING_RELEASE_MS = 500;
 let ringLevel = 0;
@@ -535,7 +542,8 @@ function frame(t) {
   textLayer.update(dtMs);
   historyLayer.update(dtMs);
   if (ovalEnabled) {
-    const target = micVolume.getNormalized(Math.min(micFloorDb + RING_FLOOR_OFFSET_DB, micCeilDb - 3), micCeilDb);
+    const micLevel = micVolume.getNormalized(Math.min(micFloorDb + RING_FLOOR_OFFSET_DB, micCeilDb - 3), micCeilDb);
+    const target = userSpeaking ? Math.max(micLevel, RING_USER_BASELINE) : micLevel * RING_CORPUS_GAIN;
     ringLevel += (target - ringLevel) * (1 - Math.exp(-dtMs / (target > ringLevel ? RING_ATTACK_MS : RING_RELEASE_MS)));
     sampleRingTarget(t);
     const follow = 1 - Math.exp(-dtMs / RING_COLOR_TAU_MS);
@@ -870,6 +878,7 @@ startBtn.addEventListener('click', () => {
 // hand once an IAC bus is connected, without needing to actually speak.
 window.__illuminate = {
   setPhrase: (text) => onPhrase(text, false),
+  speechResult: onSpeechResult,
   finish: (text) => onPhrase(text, true),
   monologue,
   midiOutput,
