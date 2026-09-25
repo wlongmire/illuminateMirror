@@ -2,6 +2,14 @@
 // renderer uses as a texture input. Owns the fade-in/fade-out timing and
 // the word-wrap/auto-fit layout so the GL side stays purely visual.
 
+// Fill behind each line of the overlay phrase and the text drawn on it, as
+// "r, g, b" triples: real speech is black on white, corpus is white on black
+// (the black box also masks the history text behind it).
+const USER_BOX_RGB = '255, 255, 255';
+const USER_TEXT_RGB = '0, 0, 0';
+const CORPUS_BOX_RGB = '0, 0, 0';
+const CORPUS_TEXT_RGB = '255, 255, 255';
+
 function wrapText(ctx, text, maxWidth) {
   const words = text.split(/\s+/).filter(Boolean);
   const lines = [];
@@ -333,13 +341,20 @@ export class TextLayer {
     ctx.font = `${this.fontWeight} ${fontSize}px ${this.fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = `rgba(255, 255, 255, ${this.alpha})`;
     if ('letterSpacing' in ctx) ctx.letterSpacing = `${this.letterSpacing}px`;
 
+    // Each line sits on a filled box (see the color constants above).
+    const [boxRgb, textRgb] = this.dim ? [CORPUS_BOX_RGB, CORPUS_TEXT_RGB] : [USER_BOX_RGB, USER_TEXT_RGB];
+    const padX = fontSize * 0.25;
     const totalHeight = lines.length * lineHeight;
     const startY = cy - totalHeight / 2 + lineHeight / 2;
     lines.forEach((line, i) => {
-      ctx.fillText(line, cx, lineYs ? lineYs[i] : startY + i * lineHeight);
+      const y = lineYs ? lineYs[i] : startY + i * lineHeight;
+      const w = ctx.measureText(line).width + padX * 2;
+      ctx.fillStyle = `rgba(${boxRgb}, ${this.alpha})`;
+      ctx.fillRect(cx - w / 2, y - lineHeight / 2, w, lineHeight);
+      ctx.fillStyle = `rgba(${textRgb}, ${this.alpha})`;
+      ctx.fillText(line, cx, y);
     });
     ctx.restore();
   }
