@@ -19,6 +19,15 @@ const SCROLL_TAU_MS = 220; // time constant for easing scroll position toward it
 // are too narrow to hold a word.
 const ELLIPSE_INSET = 0.94;
 const MIN_CHORD = 0.3;
+// Text is drawn from the alphabetic baseline, this far below the top of its
+// line slot (in font sizes), so it sits centered in the spoken words'
+// highlight boxes (which run from -0.1 to +1.2 of the slot, centered at
+// +0.55). Measured for this blackletter face: the visual center of typical
+// English text (a mix of ascenders and descenders) is ~0.31em above the
+// baseline, so the baseline goes at 0.55 + 0.31. One fixed baseline for every
+// word, rather than centering each word's own ink, keeps a line's baseline
+// from jumping between words.
+const BASELINE_EM = 0.86;
 const MAX_REWRAP_WORDS = 1500; // words considered after a reset of the visible window (a full oval holds ~1000 at the smallest sizes)
 
 function easeOutCubic(t) {
@@ -178,7 +187,7 @@ export class HistoryLayer {
       if (word.source === 'corpus') {
         this.corpusCtx.font = `400 ${word.fontSize}px ${this.fontFamily}`;
         this.corpusCtx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-        this.corpusCtx.fillText(word.text, cx, y + riseY);
+        this.corpusCtx.fillText(word.text, cx, y + riseY + word.fontSize * BASELINE_EM);
       } else {
         const next = lineWords[i + 1];
         const joinNext = next !== undefined && next.source !== 'corpus';
@@ -210,7 +219,7 @@ export class HistoryLayer {
     ctx.fillRect(left, top, right - left, height);
 
     ctx.fillStyle = '#000';
-    ctx.fillText(text, cx, y);
+    ctx.fillText(text, cx, y + fontSize * BASELINE_EM);
   }
 
   // Greedy top-down wrap into an ellipse: each line's width is the
@@ -257,7 +266,7 @@ export class HistoryLayer {
 
     for (const layerCtx of this.layerCtxs) {
       layerCtx.textAlign = 'left';
-      layerCtx.textBaseline = 'top';
+      layerCtx.textBaseline = 'alphabetic';
     }
 
     const ctx = this.userCtx;
@@ -321,7 +330,7 @@ export class HistoryLayer {
 
     for (const layerCtx of this.layerCtxs) {
       layerCtx.textAlign = 'left';
-      layerCtx.textBaseline = 'top';
+      layerCtx.textBaseline = 'alphabetic';
     }
 
     // Measured once on one layer — the font is identical on both, so the
