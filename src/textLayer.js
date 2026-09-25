@@ -195,8 +195,10 @@ export class TextLayer {
   // Live/interim transcript for the utterance currently being spoken.
   // The finalized wording is never shown here — call finishUtterance()
   // when the utterance completes instead of another setPhrase(). Pass
-  // dim: true for corpus/monologue text — ignored on continuation calls
-  // for the same utterance, since that's decided when the utterance starts.
+  // dim: true for corpus/monologue text. A call whose dim differs from the
+  // utterance in progress is never a continuation of it (corpus words must
+  // not inherit real speech's styling, or vice versa, when the previous
+  // utterance was never explicitly finished) — it starts a new one.
   // `volume` (0..1, real speech only) is the utterance's current loudness —
   // read live on every call (unlike history's per-word volume, which is
   // baked in once), so the block keeps growing/shrinking with it word to word.
@@ -209,7 +211,7 @@ export class TextLayer {
     this.holdTimer = 0;
     this.volume = volume;
 
-    if (this.utteranceActive) {
+    if (this.utteranceActive && dim === this.dim) {
       // Same utterance as last call, just a longer interim transcript —
       // update in place rather than re-running the crossfade. Exception:
       // if speech paused long enough for the phrase to already auto-fade
