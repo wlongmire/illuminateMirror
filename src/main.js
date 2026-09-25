@@ -30,6 +30,8 @@ const styleTransitionEl = document.getElementById('styleTransition');
 const styleTransitionVal = document.getElementById('styleTransitionVal');
 const styleHoldEl = document.getElementById('styleHold');
 const styleHoldVal = document.getElementById('styleHoldVal');
+const styleMaxWordsEl = document.getElementById('styleMaxWords');
+const styleMaxWordsVal = document.getElementById('styleMaxWordsVal');
 const styleCorpusAlphaEl = document.getElementById('styleCorpusAlpha');
 const styleCorpusAlphaVal = document.getElementById('styleCorpusAlphaVal');
 const styleUserAlphaEl = document.getElementById('styleUserAlpha');
@@ -93,6 +95,9 @@ const STYLE_STORAGE_KEY = 'illuminate:textStyle';
 const DEFAULT_STYLE = {
   fontFamily: "'UnifrakturCook', serif", fontWeight: 700, sizeScale: 1, userSizeScale: 1, userVolumeBoost: 0.6, letterSpacing: 0,
   transitionMs: 300, holdMs: 1200,
+  // A spoken utterance longer than this many words is cut into chunks of
+  // this size (the next word starts a fresh phrase). 0 = no limit.
+  maxUtteranceWords: 6,
   corpusMode: 'sine', corpusBaseMs: 300, corpusAmplitudeMs: 150, corpusFrequencyHz: 0.2,
   videoSource: 'camera', cameraDeviceId: '', videoInfluence: 0, videoGain: 1,
   corpusAlpha: 1, userAlpha: 0.65,
@@ -174,6 +179,7 @@ const micVolume = new MicVolumeMeter();
 let corpusVelocity = initialStyle.corpusVelocity;
 let micFloorDb = initialStyle.micFloorDb;
 let micCeilDb = initialStyle.micCeilDb;
+let maxUtteranceWords = initialStyle.maxUtteranceWords;
 
 let renderer;
 try {
@@ -207,6 +213,8 @@ function applyStyleToPanel(style) {
   styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
   styleHoldEl.value = style.holdMs;
   styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
+  styleMaxWordsEl.value = style.maxUtteranceWords;
+  styleMaxWordsVal.textContent = style.maxUtteranceWords || 'off';
   styleCorpusAlphaEl.value = Math.round(style.corpusAlpha * 100);
   styleCorpusAlphaVal.textContent = `${Math.round(style.corpusAlpha * 100)}%`;
   styleUserAlphaEl.value = Math.round(style.userAlpha * 100);
@@ -254,6 +262,7 @@ function onStyleInput() {
     letterSpacing: Number(styleSpacingEl.value),
     transitionMs: Number(styleTransitionEl.value),
     holdMs: Number(styleHoldEl.value),
+    maxUtteranceWords: Number(styleMaxWordsEl.value),
     corpusAlpha: Number(styleCorpusAlphaEl.value) / 100,
     userAlpha: Number(styleUserAlphaEl.value) / 100,
     userWordSizeScale: Number(styleUserWordSizeEl.value) / 100,
@@ -280,6 +289,8 @@ function onStyleInput() {
   styleSpacingVal.textContent = `${style.letterSpacing}px`;
   styleTransitionVal.textContent = `${(style.transitionMs / 1000).toFixed(1)}s`;
   styleHoldVal.textContent = `${(style.holdMs / 1000).toFixed(1)}s`;
+  styleMaxWordsVal.textContent = style.maxUtteranceWords || 'off';
+  maxUtteranceWords = style.maxUtteranceWords;
   styleCorpusBaseVal.textContent = `${style.corpusBaseMs}ms/word`;
   styleCorpusAmplitudeVal.textContent = `${style.corpusAmplitudeMs}ms`;
   styleCorpusFrequencyVal.textContent = formatFrequency(style.corpusFrequencyHz);
@@ -333,7 +344,7 @@ function onStyleInput() {
 }
 [
   styleFontEl, styleWeightEl, styleSizeEl, styleUserSizeEl, styleUserVolumeBoostEl, styleSpacingEl,
-  styleTransitionEl, styleHoldEl, styleCorpusModeEl, styleCorpusBaseEl,
+  styleTransitionEl, styleHoldEl, styleMaxWordsEl, styleCorpusModeEl, styleCorpusBaseEl,
   styleCorpusAmplitudeEl, styleCorpusFrequencyEl,
   styleVideoSourceEl, styleCameraDeviceEl, styleVideoInfluenceEl, styleVideoGainEl,
   styleCorpusAlphaEl, styleUserAlphaEl, styleUserWordSizeEl, styleVolumeBoostEl,
@@ -561,6 +572,9 @@ glCanvas.addEventListener('webglcontextlost', (e) => {
 // transcript grows back past the old peak.
 let spokenWords = [];
 let spokenVolumes = [];
+// Index into the current transcript where the phrase now on screen begins
+// (see maxUtteranceWords) — 0 until a long utterance gets cut into chunks.
+let chunkStart = 0;
 
 // User MIDI notes fire as one settled sequence after the utterance ends,
 // not live per word — since SpeechBridge's revising hypothesis means an
@@ -597,6 +611,7 @@ function flushUserNotes() {
   const volumes = spokenVolumes;
   spokenWords = [];
   spokenVolumes = [];
+  chunkStart = 0;
   if (words.length === 0) return;
 
   const key = words.join('\n');
@@ -619,16 +634,29 @@ function onPhrase(text, isFinal) {
   // when SpeechBridge force-ends an utterance), so it's diffed like any
   // partial. An empty final must not wipe the words awaiting flush.
   if (words.length > 0) {
-    let common = 0;
+    if (chunkStart > words.length) chunkStart = words.length;
+    // Words before chunkStart already belong to closed-out phrases, so a
+    // late revision of them is ignored: only the current phrase's words are
+    // compared against the previous transcript.
+    let common = Math.min(chunkStart, spokenWords.length);
     while (common < spokenWords.length && common < words.length && spokenWords[common] === words[common]) {
       common++;
     }
-    words.slice(common).forEach((word, i) => {
-      historyLayer.addWord(word, { firstOfUtterance: common === 0 && i === 0, volume });
-      spokenVolumes[common + i] = volume;
-    });
+    let cut = false;
+    for (let idx = common; idx < words.length; idx++) {
+      if (maxUtteranceWords > 0 && idx - chunkStart >= maxUtteranceWords) {
+        // Word idx would be the phrase's (max+1)th — close out the current
+        // phrase (period on its last word) and start a new one with it.
+        historyLayer.endUtterance();
+        chunkStart = idx;
+        cut = true;
+      }
+      historyLayer.addWord(words[idx], { firstOfUtterance: idx === chunkStart, volume });
+      spokenVolumes[idx] = volume;
+    }
     spokenWords = words;
-    textLayer.setPhrase(text, { dim: false, volume });
+    if (cut) textLayer.finishUtterance();
+    textLayer.setPhrase(words.slice(chunkStart).join(' '), { dim: false, volume });
   }
   if (isFinal) {
     flushUserNotes();
@@ -730,4 +758,6 @@ window.__illuminate = {
   monologue,
   midiOutput,
   micVolume,
+  textLayer,
+  historyLayer,
 };
