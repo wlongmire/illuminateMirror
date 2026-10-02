@@ -4,7 +4,8 @@ import { HistoryLayer } from './historyLayer.js';
 import { Renderer } from './renderer.js';
 import { Monologue } from './monologue.js';
 import { VideoInput, MIRROR_VIDEOS, listCameraDevices } from './videoInput.js';
-import { MidiOutput, GRANULAR_CHANNEL } from './midiOutput.js';
+import { MidiOutput } from './midiOutput.js';
+import { sendWordCC } from './textToCC.js';
 import { MicVolumeMeter } from './micVolume.js';
 import { MicPassthrough, listAudioOutputDevices } from './micPassthrough.js';
 
@@ -72,6 +73,7 @@ const styleUtteranceEndEl = document.getElementById('styleUtteranceEnd');
 const styleUtteranceEndVal = document.getElementById('styleUtteranceEndVal');
 const gateReadoutEl = document.getElementById('gateReadout');
 const gateBypassToggleEl = document.getElementById('gateBypassToggle');
+const styleCcCorpusEl = document.getElementById('styleCcCorpus');
 const stylePassthroughEnabledEl = document.getElementById('stylePassthroughEnabled');
 const stylePassthroughGatedEl = document.getElementById('stylePassthroughGated');
 const stylePassthroughGainEl = document.getElementById('stylePassthroughGain');
@@ -98,7 +100,6 @@ for (const v of MIRROR_VIDEOS) {
 // from the one currently showing, so the change is always visible.
 const AUTO_ROTATE_MIN_MS = 20000;
 const AUTO_ROTATE_MAX_MS = 45000;
-const GRANULAR_RANDOM_CCS = [2, 4, 6];
 let autoRotateCount = 0;
 let autoRotatePending = false;
 let autoRotateTimer = null;
@@ -122,15 +123,6 @@ function checkAutoRotate() {
   }
   styleVideoSourceEl.value = nextId;
   styleVideoSourceEl.dispatchEvent(new Event('input', { bubbles: true }));
-  // A fresh random value for a few of the granular engine's own CCs (see
-  // the external SuperCollider chart — channel 3/0xB2 is its CC/mixer
-  // surface, reserved for exactly this, per the note in midiOutput.js):
-  // CC2 grain density multiplier, CC4 position jitter, CC6 grain window
-  // shape. Picked out for the video-change moment specifically, not the
-  // other CCs on that surface.
-  for (const ccNumber of GRANULAR_RANDOM_CCS) {
-    midiOutput.sendCC(GRANULAR_CHANNEL, ccNumber, Math.floor(Math.random() * 128));
-  }
   scheduleAutoRotate();
 }
 
@@ -159,6 +151,7 @@ const DEFAULT_STYLE = {
   // MIDI: user-note velocity comes from live mic level (calibrated by the
   // floor/ceiling dB range below); corpus notes use a fixed velocity.
   corpusVelocity: 90, micFloorDb: -50, micCeilDb: -12,
+  ccCorpus: true,
   // SpeechBridge proximity gate: audio quieter than this never reaches the
   // recognizer, so only speech close to the mic gets transcribed. A pause
   // of utteranceEndMs after gated speech ends the utterance.
@@ -281,6 +274,7 @@ let corpusVelocity = initialStyle.corpusVelocity;
 let micFloorDb = initialStyle.micFloorDb;
 let micCeilDb = initialStyle.micCeilDb;
 let maxUtteranceWords = initialStyle.maxUtteranceWords;
+let ccCorpus = initialStyle.ccCorpus;
 
 let renderer;
 try {
@@ -352,6 +346,7 @@ function applyStyleToPanel(style) {
   styleUtteranceEndEl.value = style.utteranceEndMs;
   styleUtteranceEndVal.textContent = `${(style.utteranceEndMs / 1000).toFixed(2)}s`;
   stylePassthroughEnabledEl.checked = style.passthroughEnabled;
+  styleCcCorpusEl.checked = style.ccCorpus;
   stylePassthroughGatedEl.checked = style.passthroughGated;
   stylePassthroughGainEl.value = style.passthroughGain;
   stylePassthroughGainVal.textContent = `${style.passthroughGain.toFixed(1)}x`;
@@ -392,6 +387,7 @@ function onStyleInput() {
     passthroughGated: stylePassthroughGatedEl.checked,
     passthroughGain: Number(stylePassthroughGainEl.value),
     passthroughDeviceId: stylePassthroughDeviceEl.value,
+    ccCorpus: styleCcCorpusEl.checked,
   };
   styleWeightVal.textContent = style.fontWeight;
   styleSizeVal.textContent = `${Math.round(style.sizeScale * 100)}%`;
@@ -416,6 +412,7 @@ function onStyleInput() {
   styleMicCeilVal.textContent = `${style.micCeilDb}dB`;
   corpusVelocity = style.corpusVelocity;
   micFloorDb = style.micFloorDb;
+  ccCorpus = style.ccCorpus;
   micCeilDb = style.micCeilDb;
   styleGateOpenVal.textContent = `${style.gateOpenDb}dB`;
   styleGateCloseVal.textContent = `${style.gateCloseDb}dB`;
@@ -468,6 +465,7 @@ function onStyleInput() {
   styleCorpusVelocityEl, styleMicFloorEl, styleMicCeilEl,
   styleGateOpenEl, styleGateCloseEl, styleUtteranceEndEl,
   stylePassthroughEnabledEl, stylePassthroughGatedEl, stylePassthroughGainEl, stylePassthroughDeviceEl,
+  styleCcCorpusEl,
 ].forEach((el) => {
   el.addEventListener('input', onStyleInput);
 });
@@ -876,6 +874,7 @@ function flushUserNotes() {
   words.forEach((word, i) => {
     setTimeout(() => {
       midiOutput.sendWordNote(word, 'user', Math.round(volumes[i] * 126) + 1);
+      sendWordCC(midiOutput, word);
     }, i * USER_NOTE_SPACING_MS);
   });
 }
@@ -943,6 +942,7 @@ const monologue = new Monologue({
     historyLayer.addWord(word, { ...meta, source: 'corpus' });
     textLayer.setPhrase(word, { dim: true });
     midiOutput.sendWordNote(word, 'corpus', corpusVelocity);
+    if (ccCorpus) sendWordCC(midiOutput, word);
   },
   onFinal: () => {
     historyLayer.endUtterance();
